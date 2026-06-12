@@ -1,0 +1,48 @@
+{
+  "name": "@voicethere/client",
+  "version": "0.1.0",
+  "description": "VoiceThere browser/Node client — local runner mode and cloud gateway mode",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:ci": "npm run typecheck && npm run test && npm run build",
+    "demo:local": "tsx examples/local-connect.ts",
+    "demo:cloud": "tsx examples/cloud-connect.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voicethere/client.git"
+  },
+  "keywords": [
+    "voicethere",
+    "webrtc",
+    "voice-agent",
+    "signaling"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@node-webrtc-rust/signaling": "0.5.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
+  }
+}
