@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>VoiceThere embed</title>
+  </head>
+  <body>
+    <!-- Replace data attributes with your project + client API key -->
+    <script type="module">
+      import { createVoiceThereWidget } from "@voicethere/client/embed";
+
+      createVoiceThereWidget({
+        projectId: document.body.dataset.projectId,
+        apiBase: document.body.dataset.apiBase ?? "https://app.voicethere.dev",
+        clientKey: document.body.dataset.clientKey,
+        mode: "chat",
+      });
+    </script>
+    <div
+      data-project-id="YOUR_PROJECT_UUID"
+      data-client-key="vthc_…"
+      data-api-base="https://app.voicethere.dev"
+    ></div>
+  </body>
+</html>
