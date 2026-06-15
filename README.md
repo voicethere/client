@@ -28,10 +28,12 @@ client.on("peer-joined", (peerId) => console.log("peer", peerId));
 ## Cloud (platform + gateway)
 
 ```typescript
+// Use a **client** API key (prefix vthc_) — safe to embed in web/mobile apps.
+// Create one in the dashboard (/api-keys) or: voicethere api-keys create --kind client --project-id <uuid> --name "Web app"
 const res = await fetch("https://app.voicethere.dev/api/v1/sessions", {
   method: "POST",
   headers: {
-    Authorization: "Bearer vt_…",
+    Authorization: "Bearer vthc_…",
     "Content-Type": "application/json",
   },
   body: JSON.stringify({ project_id: "<uuid>" }),
