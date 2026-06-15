@@ -37,6 +37,13 @@
     "type": "git",
     "url": "git+https://github.com/voicethere/client.git"
   },
+  "bugs": {
+    "url": "https://github.com/voicethere/client/issues"
+  },
+  "homepage": "https://github.com/voicethere/client#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "keywords": [
     "voicethere",
     "webrtc",

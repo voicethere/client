@@ -61,7 +61,7 @@ From workspace root (after M4 smoke infra is up):
 cd client && npm run demo:cloud
 ```
 
-npm publish deferred to human — see `development/webrtc-cloud/HUMAN-TASKS-M4.md`.
+npm publish via GitHub Actions on `release/*` tags — see [`scripts/RELEASE.md`](scripts/RELEASE.md).
 
 ## Browser test page
 
