@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>VoiceThere debug page</title>
+    <style>
+      body { font-family: system-ui, sans-serif; background: #0b1220; color: #e2e8f0; padding: 24px; }
+      pre { background: #111827; padding: 12px; border-radius: 8px; max-height: 320px; overflow: auto; }
+      button, input { margin-right: 8px; margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>VoiceThere debug client</h1>
+    <p>Polls <code>POST /api/v1/sessions?async=true</code> then connects WebRTC.</p>
+    <label>Project ID <input id="projectId" size="40" /></label>
+    <button id="connect">Connect</button>
+    <button id="copy">Copy log</button>
+    <pre id="log"></pre>
+    <script type="module">
+      import {
+        connectBrowserSession,
+        createDebugConsole,
+        startSession,
+      } from "@voicethere/client/browser";
+
+      const logEl = document.getElementById("log");
+      const debug = createDebugConsole(() => {
+        logEl.textContent = debug.exportText();
+      });
+
+      let session;
+      document.getElementById("connect").onclick = async () => {
+        const projectId = document.getElementById("projectId").value.trim();
+        const started = await startSession({
+          apiBase: window.location.origin,
+          projectId,
+          debug,
+          onStatus: (s) => debug.info("provision", s.status),
+        });
+        if (!started.ok) {
+          debug.error("provision", "failed", started.message);
+          return;
+        }
+        session = await connectBrowserSession({
+          mode: "both",
+          credentials: started.credentials,
+          onDebugEvent: debug,
+        });
+      };
+
+      document.getElementById("copy").onclick = () => {
+        navigator.clipboard.writeText(debug.exportText());
+      };
+    </script>
+  </body>
+</html>
