@@ -62,3 +62,13 @@ cd client && npm run demo:cloud
 ```
 
 npm publish deferred to human — see `development/webrtc-cloud/HUMAN-TASKS-M4.md`.
+
+## Browser test page
+
+For manual cloud testing with a client API key in the browser:
+
+```bash
+npm run demo:browser
+```
+
+See [`examples/browser-test/README.md`](examples/browser-test/README.md).

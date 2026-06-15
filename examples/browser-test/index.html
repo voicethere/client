@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VoiceThere client — browser test</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          sans-serif;
+        background: #070b12;
+        color: #e8eef7;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at top, rgba(34, 211, 238, 0.12), transparent 40%), #070b12;
+      }
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 2rem 1.25rem 3rem;
+      }
+      h1 {
+        margin: 0 0 0.5rem;
+        font-size: 1.75rem;
+      }
+      p {
+        color: #94a3b8;
+        line-height: 1.6;
+      }
+      form,
+      .panel {
+        margin-top: 1.5rem;
+        padding: 1.25rem;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 1rem;
+        background: rgba(255, 255, 255, 0.03);
+      }
+      label {
+        display: block;
+        margin-bottom: 1rem;
+        font-size: 0.9rem;
+        color: #cbd5e1;
+      }
+      input,
+      textarea,
+      button {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 0.35rem;
+        border-radius: 0.75rem;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        background: #0b1220;
+        color: #f8fafc;
+        padding: 0.75rem 0.9rem;
+        font: inherit;
+      }
+      textarea {
+        min-height: 5rem;
+        resize: vertical;
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-size: 0.85rem;
+      }
+      button {
+        cursor: pointer;
+        background: #0ea5e9;
+        border: none;
+        color: #04111a;
+        font-weight: 600;
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+      button.secondary {
+        background: transparent;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        color: #e2e8f0;
+      }
+      .actions {
+        display: grid;
+        gap: 0.75rem;
+        grid-template-columns: 1fr 1fr;
+      }
+      #log {
+        min-height: 220px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-size: 0.82rem;
+        color: #cbd5e1;
+      }
+      .hint {
+        font-size: 0.82rem;
+        color: #64748b;
+      }
+      .status {
+        margin-top: 0.75rem;
+        font-size: 0.9rem;
+      }
+      .status.ok {
+        color: #5eead4;
+      }
+      .status.err {
+        color: #fda4af;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>VoiceThere client test</h1>
+      <p>
+        Paste a <strong>client API key</strong> (<code>vthc_…</code>) and project ID, then connect
+        through the platform session API and <code>@voicethere/client</code> signaling.
+      </p>
+
+      <form id="connect-form" class="panel">
+        <label>
+          Platform API base URL
+          <input
+            id="api-base"
+            name="apiBase"
+            value=""
+            placeholder="Leave empty for Vite proxy → http://127.0.0.1:3000"
+            autocomplete="off"
+          />
+        </label>
+        <label>
+          Client API key
+          <textarea
+            id="api-key"
+            name="apiKey"
+            placeholder="vthc_…"
+            spellcheck="false"
+          ></textarea>
+        </label>
+        <label>
+          Project ID
+          <input id="project-id" name="projectId" placeholder="00000000-0000-4000-8000-000000000001" />
+        </label>
+        <p class="hint">
+          Create the key in the dashboard (<code>/api-keys</code>) with kind
+          <strong>Client</strong>, bound to this project. The project must be deployed.
+        </p>
+        <div class="actions">
+          <button type="submit" id="connect-btn">Connect</button>
+          <button type="button" class="secondary" id="disconnect-btn" disabled>Disconnect</button>
+        </div>
+        <p id="status" class="status" aria-live="polite"></p>
+      </form>
+
+      <section class="panel">
+        <h2 style="margin: 0 0 0.75rem; font-size: 1rem">Event log</h2>
+        <div id="log"></div>
+      </section>
+    </main>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>
