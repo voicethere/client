@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 — 2026-06-16
+
+### Added
+
+- `BrowserVoiceSession.sendBinary` / `sendSyncBinary` — send `ArrayBuffer`/`Uint8Array` on control or sync data channels.
+- `onBinaryMessage` callback for inbound binary frames.
+- Export `VOICE_SYNC_CHANNEL_LABEL` (matches helpers / agent sync channel).
+
 ## 0.3.0 — 2026-06-15
 
 ### Added
