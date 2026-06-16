@@ -6,8 +6,8 @@ Browser and Node client for VoiceThere voice sessions.
 
 | Mode | When | Signaling URL |
 |------|------|---------------|
-| **local** | M1 dev — runner on localhost | `ws://127.0.0.1:8080/ws` |
-| **cloud** | M4 — session-service session mint | `wss://signaling…/ws?token=<joinToken>` |
+| **local** | Local dev — agent runner on localhost | `ws://127.0.0.1:8080/ws` |
+| **cloud** | Hosted VoiceThere sessions | `wss://signaling…/ws?token=<joinToken>` |
 
 Wire protocol: [`@node-webrtc-rust/signaling`](https://www.npmjs.com/package/@node-webrtc-rust/signaling).
 
@@ -25,7 +25,7 @@ const client = await connectVoiceSession({
 client.on("peer-joined", (peerId) => console.log("peer", peerId));
 ```
 
-## Cloud (platform + gateway)
+## Cloud (hosted VoiceThere)
 
 ```typescript
 // Use a **client** API key (prefix vthc_) — safe to embed in web/mobile apps.
@@ -55,7 +55,7 @@ const client = await connectVoiceSession({
 
 ## Local stack verify
 
-From workspace root (after M4 smoke infra is up):
+With the VoiceThere API and session stack running locally:
 
 ```bash
 cd client && npm run demo:cloud
