@@ -36,7 +36,13 @@ export async function connectBrowserSession(
 }
 
 export { connectBrowserChatSession } from "./browser-chat-session.js";
-export { connectBrowserVoiceSession } from "./browser-voice-session.js";
+export {
+  connectBrowserVoiceSession,
+  VOICE_SYNC_CHANNEL_LABEL,
+  VOICE_CONTROL_CHANNEL_LABEL,
+  type BinaryMessageHandler,
+  type DataChannelKind,
+} from "./browser-voice-session.js";
 export { startSession } from "./session-provision.js";
 export { attachAudioVisualizer } from "./audio-visualizer.js";
 export { createDebugConsole } from "./debug-console.js";

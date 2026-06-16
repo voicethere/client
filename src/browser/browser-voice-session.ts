@@ -4,6 +4,15 @@ import type { DebugConsole } from "./debug-console.js";
 
 export const VOICE_AGENT_SERVER_PEER_ID = "voice-agent-server";
 export const VOICE_CONTROL_CHANNEL_LABEL = "voice-control";
+/** High-frequency binary sync channel (matches `@node-webrtc-rust/sdk/voice`). */
+export const VOICE_SYNC_CHANNEL_LABEL = "voicethere-sync";
+
+export type DataChannelKind = "control" | "sync";
+
+export type BinaryMessageHandler = (
+  data: ArrayBuffer,
+  channel: DataChannelKind,
+) => void;
 
 export type BrowserVoiceSessionOptions = {
   credentials: SessionCredentials;
@@ -11,6 +20,8 @@ export type BrowserVoiceSessionOptions = {
   requestMic?: boolean;
   audioElement?: HTMLAudioElement;
   onDebugEvent?: DebugConsole;
+  /** Fired for binary frames on voice-control or voicethere-sync. */
+  onBinaryMessage?: BinaryMessageHandler;
 };
 
 export type BrowserVoiceSession = {
@@ -18,11 +29,25 @@ export type BrowserVoiceSession = {
   disconnect: () => void;
   sendSpeak: (text: string) => void;
   sendChat: (text: string) => void;
+  /** JSON on voice-control (same as sendChat for `{ type: 'chat' }`). */
+  sendToAgent: (payload: Record<string, unknown>) => void;
+  /** Binary on voice-control data channel. */
+  sendBinary: (data: ArrayBuffer | Uint8Array) => void;
+  /** Binary on voicethere-sync data channel (throws if channel not open). */
+  sendSyncBinary: (data: ArrayBuffer | Uint8Array) => void;
   getMicStream: () => MediaStream | null;
 };
 
 function defaultPeerId(): string {
   return `client-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function toArrayBuffer(data: ArrayBuffer | Uint8Array): ArrayBuffer {
+  if (data instanceof ArrayBuffer) return data;
+  return data.buffer.slice(
+    data.byteOffset,
+    data.byteOffset + data.byteLength,
+  ) as ArrayBuffer;
 }
 
 export async function connectBrowserVoiceSession(
@@ -42,6 +67,7 @@ export async function connectBrowserVoiceSession(
   let ws: WebSocket | null = null;
   let pc: RTCPeerConnection | null = null;
   let controlChannel: RTCDataChannel | null = null;
+  let syncChannel: RTCDataChannel | null = null;
   let micStream: MediaStream | null = null;
   const pendingIce: RTCIceCandidateInit[] = [];
 
@@ -53,6 +79,56 @@ export async function connectBrowserVoiceSession(
 
   const sendToServer = (payload: Record<string, unknown>) => {
     sendSignal({ room: roomId, peerId, ...payload });
+  };
+
+  const dispatchBinary = (data: ArrayBuffer, channel: DataChannelKind) => {
+    debug?.debug("dc", "binary", `${channel}:${data.byteLength}b`);
+    options.onBinaryMessage?.(data, channel);
+  };
+
+  const wireBinaryChannel = (
+    channel: RTCDataChannel,
+    kind: DataChannelKind,
+  ) => {
+    channel.binaryType = "arraybuffer";
+    channel.onmessage = (event) => {
+      if (typeof event.data === "string") {
+        if (kind === "control") {
+          debug?.debug("dc", "message", String(event.data));
+          try {
+            const message = JSON.parse(String(event.data)) as {
+              type?: string;
+              event?: string;
+              text?: string;
+            };
+            if (message.type === "speech_event") {
+              debug?.info("speech", message.event ?? "event", message.text);
+            } else {
+              debug?.info("dc", message.type ?? "json", message.text);
+            }
+          } catch {
+            debug?.warn("dc", "malformed", String(event.data));
+          }
+        }
+        return;
+      }
+      const buf: ArrayBuffer =
+        event.data instanceof ArrayBuffer
+          ? event.data
+          : (() => {
+              const view = event.data as ArrayBufferView;
+              const copy = new ArrayBuffer(view.byteLength);
+              new Uint8Array(copy).set(
+                new Uint8Array(
+                  view.buffer,
+                  view.byteOffset,
+                  view.byteLength,
+                ),
+              );
+              return copy;
+            })();
+      dispatchBinary(buf, kind);
+    };
   };
 
   if (options.requestMic !== false) {
@@ -83,23 +159,18 @@ export async function connectBrowserVoiceSession(
       debug?.info("dc", "close", VOICE_CONTROL_CHANNEL_LABEL);
       controlChannel = null;
     };
-    channel.onmessage = (event) => {
-      debug?.debug("dc", "message", String(event.data));
-      try {
-        const message = JSON.parse(String(event.data)) as {
-          type?: string;
-          event?: string;
-          text?: string;
-        };
-        if (message.type === "speech_event") {
-          debug?.info("speech", message.event ?? "event", message.text);
-        } else {
-          debug?.info("dc", message.type ?? "json", message.text);
-        }
-      } catch {
-        debug?.warn("dc", "malformed", String(event.data));
-      }
+    wireBinaryChannel(channel, "control");
+  };
+
+  const wireSync = (channel: RTCDataChannel) => {
+    syncChannel = channel;
+    channel.onopen = () =>
+      debug?.info("dc", "open", VOICE_SYNC_CHANNEL_LABEL);
+    channel.onclose = () => {
+      debug?.info("dc", "close", VOICE_SYNC_CHANNEL_LABEL);
+      syncChannel = null;
     };
+    wireBinaryChannel(channel, "sync");
   };
 
   const onServerOffer = async (sdp: RTCSessionDescriptionInit) => {
@@ -107,6 +178,8 @@ export async function connectBrowserVoiceSession(
       pc.close();
       pc = null;
       pendingIce.length = 0;
+      controlChannel = null;
+      syncChannel = null;
     }
 
     pc = new RTCPeerConnection({ iceServers });
@@ -124,6 +197,8 @@ export async function connectBrowserVoiceSession(
     pc.ondatachannel = (event) => {
       if (event.channel.label === VOICE_CONTROL_CHANNEL_LABEL) {
         wireControl(event.channel);
+      } else if (event.channel.label === VOICE_SYNC_CHANNEL_LABEL) {
+        wireSync(event.channel);
       }
     };
 
@@ -194,27 +269,48 @@ export async function connectBrowserVoiceSession(
     }
   };
 
+  const requireOpenControl = (): RTCDataChannel => {
+    if (!controlChannel || controlChannel.readyState !== "open") {
+      debug?.error("dc", "control_not_open");
+      throw new Error("voice-control data channel is not open");
+    }
+    return controlChannel;
+  };
+
+  const requireOpenSync = (): RTCDataChannel => {
+    if (!syncChannel || syncChannel.readyState !== "open") {
+      debug?.error("dc", "sync_not_open");
+      throw new Error("voicethere-sync data channel is not open");
+    }
+    return syncChannel;
+  };
+
   return {
     peerId,
     getMicStream: () => micStream,
     sendSpeak: (text: string) => {
-      if (!controlChannel || controlChannel.readyState !== "open") {
-        debug?.error("dc", "speak_failed", "control channel not open");
-        return;
-      }
-      controlChannel.send(JSON.stringify({ type: "speak", text }));
+      requireOpenControl().send(JSON.stringify({ type: "speak", text }));
       debug?.info("dc", "speak", text);
     },
     sendChat: (text: string) => {
-      if (!controlChannel || controlChannel.readyState !== "open") {
-        debug?.error("dc", "chat_failed", "control channel not open");
-        return;
-      }
-      controlChannel.send(JSON.stringify({ type: "chat", text }));
+      requireOpenControl().send(JSON.stringify({ type: "chat", text }));
       debug?.info("dc", "chat", text);
+    },
+    sendToAgent: (payload: Record<string, unknown>) => {
+      requireOpenControl().send(JSON.stringify(payload));
+      debug?.info("dc", "json", String(payload.type ?? "payload"));
+    },
+    sendBinary: (data: ArrayBuffer | Uint8Array) => {
+      requireOpenControl().send(toArrayBuffer(data));
+      debug?.debug("dc", "binary_send", `control:${data.byteLength}b`);
+    },
+    sendSyncBinary: (data: ArrayBuffer | Uint8Array) => {
+      requireOpenSync().send(toArrayBuffer(data));
+      debug?.debug("dc", "binary_send", `sync:${data.byteLength}b`);
     },
     disconnect: () => {
       controlChannel?.close();
+      syncChannel?.close();
       pc?.close();
       micStream?.getTracks().forEach((track) => track.stop());
       ws?.close();
