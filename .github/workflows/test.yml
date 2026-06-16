@@ -1,0 +1,73 @@
+name: Client tests
+
+on:
+  workflow_call:
+    inputs:
+      force_test:
+        description: Run tests regardless of path filters (release tags)
+        type: boolean
+        default: false
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          token: ${{ github.token }}
+          filters: |
+            code:
+              - 'src/**'
+              - 'scripts/**'
+              - 'examples/**'
+              - 'templates/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'tsconfig*.json'
+              - 'vitest*'
+              - 'eslint*'
+              - 'prettier*'
+              - '!**/*.md'
+            workflows:
+              - '.github/**'
+
+  test:
+    needs: changes
+    if: |
+      inputs.force_test ||
+      needs.changes.outputs.code == 'true' ||
+      needs.changes.outputs.workflows == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck, test, and build
+        run: npm run test:ci
+
+  skip:
+    needs: changes
+    if: |
+      !inputs.force_test &&
+      needs.changes.outputs.code != 'true' &&
+      needs.changes.outputs.workflows != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Docs-only change — skipping tests"
