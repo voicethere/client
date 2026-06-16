@@ -41,7 +41,7 @@ async function startSession(
   apiKey: string,
   projectId: string,
 ): Promise<SessionResponse> {
-  const response = await fetch(`${apiBase}/api/v1/sessions`, {
+  const response = await fetch(`${apiBase}/sessions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey.trim()}`,
@@ -85,7 +85,7 @@ formEl.addEventListener("submit", async (event) => {
       activeClient = null;
     }
 
-    log(`POST ${apiBase}/api/v1/sessions (project ${projectId.slice(0, 8)}…)`);
+    log(`POST ${apiBase}/sessions (project ${projectId.slice(0, 8)}…)`);
     const session = await startSession(apiBase, apiKey, projectId);
     log(`Session minted: ${session.session_id}`);
 

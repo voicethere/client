@@ -69,7 +69,7 @@ async function pollSessionStatus(input: {
   debug?: DebugConsole;
 }): Promise<StartSessionResult> {
   const started = Date.now();
-  const url = `${input.apiBase.replace(/\/$/, "")}/api/v1/sessions/${input.jobId}`;
+  const url = `${input.apiBase.replace(/\/$/, "")}/sessions/${input.jobId}`;
 
   while (Date.now() - started < input.pollTimeoutMs) {
     const res = await fetch(url, { headers: input.headers });
@@ -114,7 +114,8 @@ async function pollSessionStatus(input: {
 }
 
 /**
- * POST /api/v1/sessions with async=true and poll GET until ready or failed.
+ * POST /v1/sessions with async=true and poll GET until ready or failed.
+ * `apiBase` should point at the session-service root, e.g. https://sessions.voicethere.dev/v1
  */
 export async function startSession(
   options: StartSessionOptions,
@@ -133,7 +134,7 @@ export async function startSession(
 
   options.debug?.info("provision", "post_sessions", JSON.stringify(body));
 
-  const res = await fetch(`${apiBase}/api/v1/sessions`, {
+  const res = await fetch(`${apiBase}/sessions`, {
     method: "POST",
     headers,
     body: JSON.stringify(body),

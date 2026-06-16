@@ -7,7 +7,7 @@ Browser and Node client for VoiceThere voice sessions.
 | Mode | When | Signaling URL |
 |------|------|---------------|
 | **local** | M1 dev — runner on localhost | `ws://127.0.0.1:8080/ws` |
-| **cloud** | M4 — platform session mint | `wss://signaling…/ws?token=<joinToken>` |
+| **cloud** | M4 — session-service session mint | `wss://signaling…/ws?token=<joinToken>` |
 
 Wire protocol: [`@node-webrtc-rust/signaling`](https://www.npmjs.com/package/@node-webrtc-rust/signaling).
 
@@ -30,7 +30,7 @@ client.on("peer-joined", (peerId) => console.log("peer", peerId));
 ```typescript
 // Use a **client** API key (prefix vthc_) — safe to embed in web/mobile apps.
 // Create one in the dashboard (/api-keys) or: voicethere api-keys create --kind client --project-id <uuid> --name "Web app"
-const res = await fetch("https://app.voicethere.dev/api/v1/sessions", {
+const res = await fetch("https://sessions.voicethere.dev/v1/sessions", {
   method: "POST",
   headers: {
     Authorization: "Bearer vthc_…",
