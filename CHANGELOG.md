@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 — 2026-06-17
+
+### Added
+
+- `@voicethere/client/node` — headless E2E runtime (`createNodeWebRtcRuntime`) using `ws` + `@node-webrtc-rust/sdk`
+- Injectable `WebRtcRuntime` on `connectBrowserVoiceSession` for Node test harnesses
+- `waitForConnected`, `onControlMessage` on browser voice sessions
+
 ## 0.4.0 — 2026-06-16
 
 ### Added

@@ -42,6 +42,8 @@ export {
   VOICE_CONTROL_CHANNEL_LABEL,
   type BinaryMessageHandler,
   type DataChannelKind,
+  type BrowserVoiceSession,
+  type BrowserVoiceSessionOptions,
 } from "./browser-voice-session.js";
 export { startSession } from "./session-provision.js";
 export { attachAudioVisualizer } from "./audio-visualizer.js";
@@ -55,3 +57,5 @@ export type {
 } from "./session-provision.js";
 
 export type { DebugConsole, DebugEvent } from "./debug-console.js";
+export type { WebRtcRuntime } from "./webrtc-runtime.js";
+export { getDefaultBrowserRuntime } from "./webrtc-runtime.js";

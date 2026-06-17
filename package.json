@@ -1,6 +1,6 @@
 {
   "name": "@voicethere/client",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "VoiceThere browser/Node client — cloud gateway, browser voice/chat, embed widget",
   "type": "module",
   "exports": {
@@ -15,6 +15,10 @@
     "./embed": {
       "types": "./dist/embed/index.d.ts",
       "import": "./dist/embed/index.js"
+    },
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "import": "./dist/node/index.js"
     }
   },
   "files": [
@@ -58,10 +62,25 @@
     "@node-webrtc-rust/signaling": "0.5.2"
   },
   "devDependencies": {
+    "@node-webrtc-rust/sdk": "0.5.2",
     "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.14",
     "tsx": "^4.19.2",
     "typescript": "^5.7.0",
     "vite": "^6.0.3",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "ws": "^8.18.0"
+  },
+  "peerDependencies": {
+    "@node-webrtc-rust/sdk": ">=0.5.2",
+    "ws": "^8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@node-webrtc-rust/sdk": {
+      "optional": true
+    },
+    "ws": {
+      "optional": true
+    }
   }
 }

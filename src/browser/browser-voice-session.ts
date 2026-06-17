@@ -1,6 +1,10 @@
 import { appendJoinToken } from "../resolve-connection.js";
 import type { SessionCredentials } from "./session-provision.js";
 import type { DebugConsole } from "./debug-console.js";
+import {
+  getDefaultBrowserRuntime,
+  type WebRtcRuntime,
+} from "./webrtc-runtime.js";
 
 export const VOICE_AGENT_SERVER_PEER_ID = "voice-agent-server";
 export const VOICE_CONTROL_CHANNEL_LABEL = "voice-control";
@@ -20,6 +24,10 @@ export type BrowserVoiceSessionOptions = {
   requestMic?: boolean;
   audioElement?: HTMLAudioElement;
   onDebugEvent?: DebugConsole;
+  /** Injectable WebRTC runtime (default: browser globals). */
+  runtime?: WebRtcRuntime;
+  /** Fired for JSON messages on voice-control (e.g. speech_event). */
+  onControlMessage?: (payload: Record<string, unknown>) => void;
   /** Fired for binary frames on voice-control or voicethere-sync. */
   onBinaryMessage?: BinaryMessageHandler;
 };
@@ -36,6 +44,9 @@ export type BrowserVoiceSession = {
   /** Binary on voicethere-sync data channel (throws if channel not open). */
   sendSyncBinary: (data: ArrayBuffer | Uint8Array) => void;
   getMicStream: () => MediaStream | null;
+  /** Resolves when peer connection reaches `connected` (or rejects on timeout/failure). */
+  waitForConnected: (timeoutMs?: number) => Promise<void>;
+  getConnectionState: () => RTCPeerConnectionState | "new";
 };
 
 function defaultPeerId(): string {
@@ -54,6 +65,7 @@ export async function connectBrowserVoiceSession(
   options: BrowserVoiceSessionOptions,
 ): Promise<BrowserVoiceSession> {
   const debug = options.onDebugEvent;
+  const runtime = options.runtime ?? getDefaultBrowserRuntime();
   const peerId = options.peerId ?? defaultPeerId();
   const roomId = options.credentials.room_id;
   const signalingUrl = appendJoinToken(
@@ -70,9 +82,23 @@ export async function connectBrowserVoiceSession(
   let syncChannel: RTCDataChannel | null = null;
   let micStream: MediaStream | null = null;
   const pendingIce: RTCIceCandidateInit[] = [];
+  let connectionState: RTCPeerConnectionState | "new" = "new";
+  let resolveConnected: (() => void) | null = null;
+  let rejectConnected: ((error: Error) => void) | null = null;
+  let connectedPromise: Promise<void> | null = null;
+
+  const ensureConnectedPromise = (): Promise<void> => {
+    if (!connectedPromise) {
+      connectedPromise = new Promise<void>((resolve, reject) => {
+        resolveConnected = resolve;
+        rejectConnected = reject;
+      });
+    }
+    return connectedPromise;
+  };
 
   const sendSignal = (message: Record<string, unknown>) => {
-    if (ws?.readyState === WebSocket.OPEN) {
+    if (ws?.readyState === runtime.WebSocket.OPEN) {
       ws.send(JSON.stringify(message));
     }
   };
@@ -86,6 +112,25 @@ export async function connectBrowserVoiceSession(
     options.onBinaryMessage?.(data, channel);
   };
 
+  const handleControlJson = (raw: string) => {
+    debug?.debug("dc", "message", raw);
+    try {
+      const message = JSON.parse(raw) as Record<string, unknown> & {
+        type?: string;
+        event?: string;
+        text?: string;
+      };
+      options.onControlMessage?.(message);
+      if (message.type === "speech_event") {
+        debug?.info("speech", message.event ?? "event", message.text);
+      } else {
+        debug?.info("dc", message.type ?? "json", message.text);
+      }
+    } catch {
+      debug?.warn("dc", "malformed", raw);
+    }
+  };
+
   const wireBinaryChannel = (
     channel: RTCDataChannel,
     kind: DataChannelKind,
@@ -94,21 +139,7 @@ export async function connectBrowserVoiceSession(
     channel.onmessage = (event) => {
       if (typeof event.data === "string") {
         if (kind === "control") {
-          debug?.debug("dc", "message", String(event.data));
-          try {
-            const message = JSON.parse(String(event.data)) as {
-              type?: string;
-              event?: string;
-              text?: string;
-            };
-            if (message.type === "speech_event") {
-              debug?.info("speech", message.event ?? "event", message.text);
-            } else {
-              debug?.info("dc", message.type ?? "json", message.text);
-            }
-          } catch {
-            debug?.warn("dc", "malformed", String(event.data));
-          }
+          handleControlJson(String(event.data));
         }
         return;
       }
@@ -132,14 +163,18 @@ export async function connectBrowserVoiceSession(
   };
 
   if (options.requestMic !== false) {
-    micStream = await navigator.mediaDevices.getUserMedia({
+    const getUserMedia = runtime.getUserMedia;
+    if (!getUserMedia) {
+      throw new Error("runtime.getUserMedia is required when requestMic is true");
+    }
+    micStream = await getUserMedia({
       audio: true,
       video: false,
     });
     debug?.info("voice", "mic_granted");
   }
 
-  ws = new WebSocket(signalingUrl);
+  ws = new runtime.WebSocket(signalingUrl);
 
   await new Promise<void>((resolve, reject) => {
     if (!ws) return reject(new Error("WebSocket missing"));
@@ -180,9 +215,14 @@ export async function connectBrowserVoiceSession(
       pendingIce.length = 0;
       controlChannel = null;
       syncChannel = null;
+      connectionState = "new";
+      connectedPromise = null;
+      resolveConnected = null;
+      rejectConnected = null;
     }
 
-    pc = new RTCPeerConnection({ iceServers });
+    ensureConnectedPromise();
+    pc = new runtime.RTCPeerConnection({ iceServers });
 
     pc.ontrack = (event) => {
       if (event.track.kind !== "audio") return;
@@ -213,7 +253,18 @@ export async function connectBrowserVoiceSession(
     };
 
     pc.onconnectionstatechange = () => {
-      debug?.info("webrtc", "connection_state", pc?.connectionState);
+      connectionState = pc?.connectionState ?? "new";
+      debug?.info("webrtc", "connection_state", connectionState);
+      if (connectionState === "connected") {
+        resolveConnected?.();
+      } else if (
+        connectionState === "failed" ||
+        connectionState === "closed"
+      ) {
+        rejectConnected?.(
+          new Error(`peer connection ${connectionState}`),
+        );
+      }
     };
 
     await pc.setRemoteDescription(sdp);
@@ -285,9 +336,25 @@ export async function connectBrowserVoiceSession(
     return syncChannel;
   };
 
+  const waitForConnected = async (timeoutMs = 60_000): Promise<void> => {
+    if (connectionState === "connected") return;
+    ensureConnectedPromise();
+    await Promise.race([
+      connectedPromise,
+      new Promise<void>((_, reject) => {
+        setTimeout(
+          () => reject(new Error(`WebRTC connect timeout after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  };
+
   return {
     peerId,
     getMicStream: () => micStream,
+    getConnectionState: () => connectionState,
+    waitForConnected,
     sendSpeak: (text: string) => {
       requireOpenControl().send(JSON.stringify({ type: "speak", text }));
       debug?.info("dc", "speak", text);
