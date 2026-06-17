@@ -34,6 +34,9 @@ This validates session mint + signaling join. Full WebRTC media requires a deplo
 
 ## CORS
 
-Leave the API base URL **empty** when running locally — Vite proxies `/api/*` to port 3000 (no CORS setup needed).
+Dashboard chat and embed widgets call **session-service** (`https://sessions.voicethere.dev/v1`) from the browser with a `vthc_` client API key.
 
-For staging (`https://app.voicethere.dev`), enter the full base URL. The API must allow browser CORS from your test origin, or use a local dev instance.
+- Staging dashboard (`https://app.voicethere.dev`) is allowed by default.
+- Local platform dev: use API base `http://127.0.0.1:3000` or proxy through Vite (leave API base empty in this harness).
+
+Leave the API base URL **empty** when running this harness locally — Vite proxies `/api/*` to port 3000 (no CORS setup needed).
