@@ -4,7 +4,7 @@ Manual test page for cloud mode using `@voicethere/client` in the browser.
 
 ## Prerequisites
 
-1. Platform API running (local `npm run dev` in `platform/` or staging).
+1. VoiceThere API running locally (`npm run dev` on port 3000) or use staging.
 2. A **deployed** project with an active build.
 3. A **client** API key (`vthc_…`) created for that project (dashboard → API keys).
 
@@ -19,7 +19,7 @@ npm run demo:browser
 
 Opens `http://127.0.0.1:5199` with:
 
-- Platform API base URL (default empty — uses Vite proxy to `http://127.0.0.1:3000`)
+- API base URL (default empty — uses Vite proxy to `http://127.0.0.1:3000`)
 - Client API key field
 - Project ID field
 - Connect / Disconnect buttons and an event log
@@ -34,6 +34,6 @@ This validates session mint + signaling join. Full WebRTC media requires a deplo
 
 ## CORS
 
-Leave the API base URL **empty** when running locally — Vite proxies `/api/*` to the platform on port 3000 (no CORS setup needed).
+Leave the API base URL **empty** when running locally — Vite proxies `/api/*` to port 3000 (no CORS setup needed).
 
-For staging (`https://app.voicethere.dev`), enter the full base URL. The platform must allow browser CORS from your test origin, or use a local platform instance.
+For staging (`https://app.voicethere.dev`), enter the full base URL. The API must allow browser CORS from your test origin, or use a local dev instance.
