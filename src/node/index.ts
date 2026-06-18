@@ -5,6 +5,7 @@ export {
   connectBrowserSession,
   connectBrowserVoiceSession,
   connectBrowserChatSession,
+  connectDataSession,
   startSession,
   VOICE_CONTROL_CHANNEL_LABEL,
   VOICE_SYNC_CHANNEL_LABEL,

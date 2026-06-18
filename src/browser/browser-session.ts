@@ -4,6 +4,7 @@ import { connectBrowserChatSession } from "./browser-chat-session.js";
 import {
   connectBrowserVoiceSession,
   type BrowserVoiceSession,
+  type BrowserVoiceSessionOptions,
 } from "./browser-voice-session.js";
 
 export type BrowserSessionMode = "voice" | "chat" | "both";
@@ -33,6 +34,12 @@ export async function connectBrowserSession(
   });
 
   return { ...session, mode: options.mode };
+}
+
+export async function connectDataSession(
+  options: Omit<BrowserVoiceSessionOptions, "requestMic">,
+): Promise<BrowserVoiceSession> {
+  return connectBrowserVoiceSession({ ...options, requestMic: false });
 }
 
 export { connectBrowserChatSession } from "./browser-chat-session.js";
