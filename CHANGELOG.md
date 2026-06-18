@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+## 0.5.1 — 2026-06-18
+
+### Fixed
+
+- **Node headless voice** — attach mic with `addTrack` **before** `setRemoteDescription` so the answer SDP includes `sendrecv` (required by `@node-webrtc-rust/sdk`; fixes runner mic-track timeout in staging E2E).
+- **Mic RTP pump** — after `connected`, send kick + silent PCM frames via `writeSample` so the server receives `ontrack` and starts VoiceAgent.
+
 ## 0.5.0 — 2026-06-17
 
 ### Added

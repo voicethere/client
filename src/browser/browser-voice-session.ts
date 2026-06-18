@@ -61,6 +61,63 @@ function toArrayBuffer(data: ArrayBuffer | Uint8Array): ArrayBuffer {
   ) as ArrayBuffer;
 }
 
+/** Node {@link @node-webrtc-rust/sdk} LocalAudioTrack — remote ontrack needs RTP via writeSample. */
+type WriteSampleTrack = {
+  writeSample: (data: Uint8Array, durationMs: number) => Promise<void>;
+};
+
+function isWriteSampleTrack(track: unknown): track is WriteSampleTrack {
+  return (
+    typeof track === "object" &&
+    track !== null &&
+    typeof (track as WriteSampleTrack).writeSample === "function"
+  );
+}
+
+async function attachMicTracks(
+  pc: RTCPeerConnection,
+  micStream: MediaStream,
+): Promise<void> {
+  for (const track of micStream.getAudioTracks()) {
+    const result = pc.addTrack(
+      track as MediaStreamTrack,
+      micStream,
+    ) as RTCRtpSender | Promise<RTCRtpSender> | void;
+    if (result && typeof (result as Promise<RTCRtpSender>).then === "function") {
+      await result;
+    }
+  }
+}
+
+function createMicPump(
+  micStream: MediaStream | null,
+  isConnected: () => boolean,
+  debug?: DebugConsole,
+): () => void {
+  let running = true;
+  void (async () => {
+    if (!micStream) return;
+    const silentFrame = new Uint8Array(3840);
+    for (const track of micStream.getAudioTracks()) {
+      if (!isWriteSampleTrack(track)) continue;
+      try {
+        await track.writeSample(new Uint8Array(960), 5);
+        debug?.info("voice", "mic_kick_sent");
+        while (running && isConnected()) {
+          await track.writeSample(silentFrame, 20);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        debug?.warn("voice", "mic_pump_failed", message);
+      }
+    }
+  })();
+  return () => {
+    running = false;
+  };
+}
+
 export async function connectBrowserVoiceSession(
   options: BrowserVoiceSessionOptions,
 ): Promise<BrowserVoiceSession> {
@@ -86,6 +143,7 @@ export async function connectBrowserVoiceSession(
   let resolveConnected: (() => void) | null = null;
   let rejectConnected: ((error: Error) => void) | null = null;
   let connectedPromise: Promise<void> | null = null;
+  let stopMicPump: (() => void) | null = null;
 
   const ensureConnectedPromise = (): Promise<void> => {
     if (!connectedPromise) {
@@ -256,26 +314,32 @@ export async function connectBrowserVoiceSession(
       connectionState = pc?.connectionState ?? "new";
       debug?.info("webrtc", "connection_state", connectionState);
       if (connectionState === "connected") {
+        stopMicPump?.();
+        stopMicPump = createMicPump(
+          micStream,
+          () => pc?.connectionState === "connected",
+          debug,
+        );
         resolveConnected?.();
       } else if (
         connectionState === "failed" ||
         connectionState === "closed"
       ) {
+        stopMicPump?.();
+        stopMicPump = null;
         rejectConnected?.(
           new Error(`peer connection ${connectionState}`),
         );
       }
     };
 
+    if (micStream) {
+      await attachMicTracks(pc, micStream);
+    }
+
     await pc.setRemoteDescription(sdp);
     for (const candidate of pendingIce.splice(0)) {
       await pc.addIceCandidate(candidate);
-    }
-
-    if (micStream) {
-      for (const track of micStream.getAudioTracks()) {
-        pc.addTrack(track, micStream);
-      }
     }
 
     const answer = await pc.createAnswer();
@@ -376,6 +440,8 @@ export async function connectBrowserVoiceSession(
       debug?.debug("dc", "binary_send", `sync:${data.byteLength}b`);
     },
     disconnect: () => {
+      stopMicPump?.();
+      stopMicPump = null;
       controlChannel?.close();
       syncChannel?.close();
       pc?.close();
