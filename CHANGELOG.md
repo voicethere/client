@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## 0.5.3 — 2026-06-19
+
+### Added
+
+- **`reconnectPolicy`** on `connectBrowserSession` / `connectBrowserVoiceSession` — `same-session` (default) auto-retries signaling with the same credentials and `peerId`; `new-session` disables auto-retry
+- **`onReconnecting(attempt)`** callback during same-session auto-retry (embed + dashboard status)
+- **`maxAutoReconnectAttempts`** (default 4) with exponential backoff
+- **`waitForConnected()`** on `connectBrowserSession` return value — await WebRTC `connected` before treating the session as ready
+- **`reconnect()`** on browser voice sessions — manual same-session signaling re-join
+
+### Changed
+
+- Recoverable WebRTC disconnects (`WEBRTC_CONNECTION_FAILED`, `WEBRTC_CONNECTION_CLOSED`) emit `session_error` with `recoverable: true` and trigger same-session retry when policy allows
+
 ## 0.5.2 — 2026-06-19
 
 ### Added
