@@ -81,6 +81,18 @@ See [`examples/browser-test/README.md`](examples/browser-test/README.md).
 | Graceful close signal | `session.sendCloseSignal(reason?)` | `client_close_signal` |
 | Server idle timeout   | _(automatic)_                      | `idle_timeout`        |
 
+## Reconnect and billing
+
+| UI / API | Behavior |
+| -------- | -------- |
+| Dashboard **Reconnect** or embed **Connect** after disconnect | Calls `startSession()` → **new orchestrator session id**, new Supabase row, new billing period once WebRTC connects |
+| Unintentional drop (network, signaling close) | Default `reconnectPolicy: "same-session"` re-joins with the **same credentials** and `peerId` (auto-retry with backoff) |
+| Manual `session.reconnect()` | Same orchestrator session — re-opens signaling only |
+
+Billing starts when the runner reports a billable WebRTC leg (voice: connected PC + open control channel + agent; data-only: PC + DC). Provision alone does not bill.
+
+Pass `reconnectPolicy: "new-session"` to disable automatic same-session retry.
+
 In `@voicethere/agent`, call `disconnectClient(sessionId, { reason })` to kick a peer from agent code (e.g. stale multiplayer state).
 
 Configure idle timeouts per project in the dashboard **Session settings** panel or `voicethere projects session-settings set`.

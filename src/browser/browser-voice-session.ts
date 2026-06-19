@@ -25,6 +25,8 @@ export type BinaryMessageHandler = (
   channel: DataChannelKind,
 ) => void;
 
+export type ReconnectPolicy = "same-session" | "new-session";
+
 export type BrowserVoiceSessionOptions = {
   credentials: SessionCredentials;
   peerId?: string;
@@ -41,6 +43,15 @@ export type BrowserVoiceSessionOptions = {
   onControlMessage?: (payload: Record<string, unknown>) => void;
   /** Fired for binary frames on voice-control or voicethere-sync. */
   onBinaryMessage?: BinaryMessageHandler;
+  /**
+   * `same-session` (default) retries signaling/WebRTC with the same credentials on
+   * unintentional disconnect. `new-session` disables auto-retry — call `startSession()`
+   * again for a fresh orchestrator session id.
+   */
+  reconnectPolicy?: ReconnectPolicy;
+  /** Max automatic same-session retries after unintentional disconnect (default 4). */
+  maxAutoReconnectAttempts?: number;
+  onReconnecting?: (attempt: number) => void;
 };
 
 export type BrowserVoiceSession = {
@@ -60,6 +71,8 @@ export type BrowserVoiceSession = {
   /** Resolves when peer connection reaches `connected` (or rejects on timeout/failure). */
   waitForConnected: (timeoutMs?: number) => Promise<void>;
   getConnectionState: () => RTCPeerConnectionState | "new";
+  /** Re-open signaling with the same credentials and peer id (same orchestrator session). */
+  reconnect: () => Promise<void>;
 };
 
 function defaultPeerId(): string {
@@ -162,6 +175,10 @@ export async function connectBrowserVoiceSession(
   let connectedPromise: Promise<void> | null = null;
   let stopMicPump: (() => void) | null = null;
   let gracefulDisconnect = false;
+  const reconnectPolicy = options.reconnectPolicy ?? "same-session";
+  const maxAutoReconnectAttempts = options.maxAutoReconnectAttempts ?? 4;
+  let autoReconnectAttempts = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
   const notifySessionError = (event: SessionErrorEvent) => {
     emitSessionError(options.onSessionError, event);
@@ -268,17 +285,19 @@ export async function connectBrowserVoiceSession(
     debug?.info("voice", "mic_granted");
   }
 
-  ws = new runtime.WebSocket(signalingUrl);
-
-  await new Promise<void>((resolve, reject) => {
-    if (!ws) return reject(new Error("WebSocket missing"));
-    ws.onopen = () => {
-      sendSignal({ type: "join", room: roomId, peerId });
-      debug?.info("signaling", "joined", roomId);
-      resolve();
-    };
-    ws.onerror = () => reject(new Error("WebSocket error"));
-  });
+  const resetPeerConnection = (): void => {
+    stopMicPump?.();
+    stopMicPump = null;
+    controlChannel = null;
+    syncChannel = null;
+    pc?.close();
+    pc = null;
+    pendingIce.length = 0;
+    connectionState = "new";
+    connectedPromise = null;
+    resolveConnected = null;
+    rejectConnected = null;
+  };
 
   const wireControl = (channel: RTCDataChannel) => {
     controlChannel = channel;
@@ -358,6 +377,7 @@ export async function connectBrowserVoiceSession(
       connectionState = pc?.connectionState ?? "new";
       debug?.info("webrtc", "connection_state", connectionState);
       if (connectionState === "connected") {
+        autoReconnectAttempts = 0;
         stopMicPump?.();
         stopMicPump = createMicPump(
           micStream,
@@ -377,6 +397,7 @@ export async function connectBrowserVoiceSession(
           occurred_at: new Date().toISOString(),
         });
         rejectConnected?.(new Error(`peer connection ${connectionState}`));
+        scheduleAutoReconnect("webrtc_failed");
       } else if (connectionState === "closed") {
         stopMicPump?.();
         stopMicPump = null;
@@ -389,6 +410,7 @@ export async function connectBrowserVoiceSession(
             recoverable: true,
             occurred_at: new Date().toISOString(),
           });
+          scheduleAutoReconnect("webrtc_closed");
         }
         rejectConnected?.(new Error(`peer connection ${connectionState}`));
       }
@@ -413,37 +435,89 @@ export async function connectBrowserVoiceSession(
     debug?.info("signaling", "answer_sent");
   };
 
-  ws.onmessage = (event) => {
-    const message = JSON.parse(String(event.data)) as {
-      type: string;
-      peerId?: string;
-      sdp?: RTCSessionDescriptionInit;
-      candidate?: RTCIceCandidateInit;
-    };
-    debug?.debug("signaling", message.type, message.peerId);
-    switch (message.type) {
-      case "offer":
-        if (message.peerId === VOICE_AGENT_SERVER_PEER_ID && message.sdp) {
-          void onServerOffer(message.sdp);
-        }
-        break;
-      case "ice-candidate":
-        if (
-          message.peerId === VOICE_AGENT_SERVER_PEER_ID &&
-          message.candidate &&
-          pc
-        ) {
-          if (!pc.remoteDescription) {
-            pendingIce.push(message.candidate);
-          } else {
-            void pc.addIceCandidate(message.candidate);
-          }
-        }
-        break;
-      default:
-        break;
+  const scheduleAutoReconnect = (reason: string): void => {
+    if (gracefulDisconnect || reconnectPolicy === "new-session") return;
+    if (autoReconnectAttempts >= maxAutoReconnectAttempts) {
+      debug?.warn("session", "auto_reconnect_exhausted", reason);
+      return;
     }
+    autoReconnectAttempts += 1;
+    options.onReconnecting?.(autoReconnectAttempts);
+    const delayMs = Math.min(1000 * 2 ** (autoReconnectAttempts - 1), 8000);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+      void reconnectSignaling().catch((error: unknown) => {
+        debug?.warn(
+          "session",
+          "auto_reconnect_failed",
+          error instanceof Error ? error.message : String(error),
+        );
+        scheduleAutoReconnect(reason);
+      });
+    }, delayMs);
   };
+
+  const attachWsMessageHandler = (): void => {
+    if (!ws) return;
+    ws.onmessage = (event) => {
+      const message = JSON.parse(String(event.data)) as {
+        type: string;
+        peerId?: string;
+        sdp?: RTCSessionDescriptionInit;
+        candidate?: RTCIceCandidateInit;
+      };
+      debug?.debug("signaling", message.type, message.peerId);
+      switch (message.type) {
+        case "offer":
+          if (message.peerId === VOICE_AGENT_SERVER_PEER_ID && message.sdp) {
+            void onServerOffer(message.sdp);
+          }
+          break;
+        case "ice-candidate":
+          if (
+            message.peerId === VOICE_AGENT_SERVER_PEER_ID &&
+            message.candidate &&
+            pc
+          ) {
+            if (!pc.remoteDescription) {
+              pendingIce.push(message.candidate);
+            } else {
+              void pc.addIceCandidate(message.candidate);
+            }
+          }
+          break;
+        default:
+          break;
+      }
+    };
+  };
+
+  const reconnectSignaling = async (): Promise<void> => {
+    resetPeerConnection();
+    if (ws) {
+      ws.onclose = null;
+      ws.close();
+      ws = null;
+    }
+    ws = new runtime.WebSocket(signalingUrl);
+    await new Promise<void>((resolve, reject) => {
+      if (!ws) return reject(new Error("WebSocket missing"));
+      ws.onopen = () => {
+        sendSignal({ type: "join", room: roomId, peerId });
+        debug?.info("signaling", "rejoined", roomId);
+        resolve();
+      };
+      ws.onerror = () => reject(new Error("WebSocket error"));
+    });
+    attachWsMessageHandler();
+    ws.onclose = () => {
+      if (gracefulDisconnect || reconnectPolicy === "new-session") return;
+      scheduleAutoReconnect("signaling_closed");
+    };
+    debug?.info("session", "same_session_reconnect", orchestratorSessionId);
+  };
+
+  await reconnectSignaling();
 
   const requireOpenControl = (): RTCDataChannel => {
     if (!controlChannel || controlChannel.readyState !== "open") {
@@ -494,6 +568,10 @@ export async function connectBrowserVoiceSession(
     getMicStream: () => micStream,
     getConnectionState: () => connectionState,
     waitForConnected,
+    reconnect: async () => {
+      autoReconnectAttempts = 0;
+      await reconnectSignaling();
+    },
     sendSpeak: (text: string) => {
       requireOpenControl().send(JSON.stringify({ type: "speak", text }));
       debug?.info("dc", "speak", text);
@@ -529,6 +607,7 @@ export async function connectBrowserVoiceSession(
     },
     disconnect: () => {
       gracefulDisconnect = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       stopMicPump?.();
       stopMicPump = null;
       controlChannel?.close();

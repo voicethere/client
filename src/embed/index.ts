@@ -142,10 +142,16 @@ export function createVoiceThereWidget(
         mode,
         credentials: started.credentials,
         onDebugEvent: debug,
+        onReconnecting: (attempt) => {
+          status.textContent = `Reconnecting (${attempt})…`;
+        },
       });
 
+      await session.waitForConnected();
       status.textContent = "Connected";
       connectBtn.textContent = "Disconnect";
+      connectBtn.title =
+        "Disconnect this session. Connect again to start a new orchestrator session.";
       renderLog();
     })();
   };

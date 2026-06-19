@@ -18,6 +18,9 @@ export type ConnectBrowserSessionOptions = {
   customerContext?: Record<string, unknown>;
   onSessionError?: import("../session-errors.js").SessionErrorHandler;
   onControlMessage?: (payload: Record<string, unknown>) => void;
+  reconnectPolicy?: import("./browser-voice-session.js").ReconnectPolicy;
+  maxAutoReconnectAttempts?: number;
+  onReconnecting?: (attempt: number) => void;
 };
 
 export type BrowserSession = BrowserVoiceSession & {
@@ -37,6 +40,9 @@ export async function connectBrowserSession(
     customerContext: options.customerContext,
     onSessionError: options.onSessionError,
     onControlMessage: options.onControlMessage,
+    reconnectPolicy: options.reconnectPolicy,
+    maxAutoReconnectAttempts: options.maxAutoReconnectAttempts,
+    onReconnecting: options.onReconnecting,
   });
 
   return { ...session, mode: options.mode };
@@ -48,6 +54,7 @@ export async function connectDataSession(
   return connectBrowserVoiceSession({ ...options, requestMic: false });
 }
 
+export type { ReconnectPolicy } from "./browser-voice-session.js";
 export { connectBrowserChatSession } from "./browser-chat-session.js";
 export {
   connectBrowserVoiceSession,
