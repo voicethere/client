@@ -1,4 +1,11 @@
 import { appendJoinToken } from "../resolve-connection.js";
+import {
+  emitSessionError,
+  isSessionErrorEvent,
+  parseLegacyAgentError,
+  type SessionErrorEvent,
+  type SessionErrorHandler,
+} from "../session-errors.js";
 import type { SessionCredentials } from "./session-provision.js";
 import type { DebugConsole } from "./debug-console.js";
 import {
@@ -26,6 +33,10 @@ export type BrowserVoiceSessionOptions = {
   onDebugEvent?: DebugConsole;
   /** Injectable WebRTC runtime (default: browser globals). */
   runtime?: WebRtcRuntime;
+  /** Opaque context forwarded to runner/agent on session start. */
+  customerContext?: Record<string, unknown>;
+  /** Unified handler for session_error DC events and local WebRTC failures. */
+  onSessionError?: SessionErrorHandler;
   /** Fired for JSON messages on voice-control (e.g. speech_event). */
   onControlMessage?: (payload: Record<string, unknown>) => void;
   /** Fired for binary frames on voice-control or voicethere-sync. */
@@ -130,6 +141,7 @@ export async function connectBrowserVoiceSession(
   const runtime = options.runtime ?? getDefaultBrowserRuntime();
   const peerId = options.peerId ?? defaultPeerId();
   const roomId = options.credentials.room_id;
+  const orchestratorSessionId = options.credentials.session_id;
   const signalingUrl = appendJoinToken(
     options.credentials.signaling_url,
     options.credentials.join_token,
@@ -149,6 +161,24 @@ export async function connectBrowserVoiceSession(
   let rejectConnected: ((error: Error) => void) | null = null;
   let connectedPromise: Promise<void> | null = null;
   let stopMicPump: (() => void) | null = null;
+  let gracefulDisconnect = false;
+
+  const notifySessionError = (event: SessionErrorEvent) => {
+    emitSessionError(options.onSessionError, event);
+  };
+
+  const handleControlPayload = (message: Record<string, unknown>) => {
+    if (isSessionErrorEvent(message)) {
+      notifySessionError(message);
+      return;
+    }
+    const legacy = parseLegacyAgentError(message, orchestratorSessionId);
+    if (legacy) {
+      notifySessionError(legacy);
+      return;
+    }
+    options.onControlMessage?.(message);
+  };
 
   const ensureConnectedPromise = (): Promise<void> => {
     if (!connectedPromise) {
@@ -183,10 +213,13 @@ export async function connectBrowserVoiceSession(
         event?: string;
         text?: string;
       };
-      options.onControlMessage?.(message);
+      handleControlPayload(message);
       if (message.type === "speech_event") {
         debug?.info("speech", message.event ?? "event", message.text);
-      } else {
+      } else if (
+        message.type !== "session_error" &&
+        message.type !== "agent_error"
+      ) {
         debug?.info("dc", message.type ?? "json", message.text);
       }
     } catch {
@@ -249,8 +282,17 @@ export async function connectBrowserVoiceSession(
 
   const wireControl = (channel: RTCDataChannel) => {
     controlChannel = channel;
-    channel.onopen = () =>
+    channel.onopen = () => {
       debug?.info("dc", "open", VOICE_CONTROL_CHANNEL_LABEL);
+      if (options.customerContext) {
+        channel.send(
+          JSON.stringify({
+            type: "session_hello",
+            customer_context: options.customerContext,
+          }),
+        );
+      }
+    };
     channel.onclose = () => {
       debug?.info("dc", "close", VOICE_CONTROL_CHANNEL_LABEL);
       controlChannel = null;
@@ -323,9 +365,31 @@ export async function connectBrowserVoiceSession(
           debug,
         );
         resolveConnected?.();
-      } else if (connectionState === "failed" || connectionState === "closed") {
+      } else if (connectionState === "failed") {
         stopMicPump?.();
         stopMicPump = null;
+        notifySessionError({
+          type: "session_error",
+          code: "WEBRTC_CONNECTION_FAILED",
+          message: "WebRTC peer connection failed",
+          session_id: orchestratorSessionId,
+          recoverable: true,
+          occurred_at: new Date().toISOString(),
+        });
+        rejectConnected?.(new Error(`peer connection ${connectionState}`));
+      } else if (connectionState === "closed") {
+        stopMicPump?.();
+        stopMicPump = null;
+        if (!gracefulDisconnect) {
+          notifySessionError({
+            type: "session_error",
+            code: "WEBRTC_CONNECTION_CLOSED",
+            message: "WebRTC peer connection closed unexpectedly",
+            session_id: orchestratorSessionId,
+            recoverable: true,
+            occurred_at: new Date().toISOString(),
+          });
+        }
         rejectConnected?.(new Error(`peer connection ${connectionState}`));
       }
     };
@@ -400,16 +464,29 @@ export async function connectBrowserVoiceSession(
   const waitForConnected = async (timeoutMs = 60_000): Promise<void> => {
     if (connectionState === "connected") return;
     ensureConnectedPromise();
-    await Promise.race([
-      connectedPromise,
-      new Promise<void>((_, reject) => {
-        setTimeout(
-          () =>
-            reject(new Error(`WebRTC connect timeout after ${timeoutMs}ms`)),
-          timeoutMs,
-        );
-      }),
-    ]);
+    try {
+      await Promise.race([
+        connectedPromise,
+        new Promise<void>((_, reject) => {
+          setTimeout(
+            () =>
+              reject(new Error(`WebRTC connect timeout after ${timeoutMs}ms`)),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } catch (error) {
+      notifySessionError({
+        type: "session_error",
+        code: "WEBRTC_CONNECT_TIMEOUT",
+        message:
+          error instanceof Error ? error.message : "WebRTC connect timeout",
+        session_id: orchestratorSessionId,
+        recoverable: true,
+        occurred_at: new Date().toISOString(),
+      });
+      throw error;
+    }
   };
 
   return {
@@ -438,15 +515,20 @@ export async function connectBrowserVoiceSession(
       debug?.debug("dc", "binary_send", `sync:${data.byteLength}b`);
     },
     sendCloseSignal: (reason?: string) => {
+      gracefulDisconnect = true;
       requireOpenControl().send(
         JSON.stringify({
           type: "session_close",
           ...(reason ? { reason } : {}),
+          ...(options.customerContext
+            ? { customer_context: options.customerContext }
+            : {}),
         }),
       );
       debug?.info("session", "close_signal", reason ?? "");
     },
     disconnect: () => {
+      gracefulDisconnect = true;
       stopMicPump?.();
       stopMicPump = null;
       controlChannel?.close();

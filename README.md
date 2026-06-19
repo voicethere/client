@@ -84,3 +84,29 @@ See [`examples/browser-test/README.md`](examples/browser-test/README.md).
 In `@voicethere/agent`, call `disconnectClient(sessionId, { reason })` to kick a peer from agent code (e.g. stale multiplayer state).
 
 Configure idle timeouts per project in the dashboard **Session settings** panel or `voicethere projects session-settings set`.
+
+## Session error events
+
+Pass `onSessionError` to `startSession` and `connectBrowserSession` for a unified handler across provisioning failures, WebRTC errors, and runner `session_error` data-channel events:
+
+```typescript
+import { startSession, connectBrowserSession } from "@voicethere/client/browser";
+
+const provision = await startSession({
+  apiBase: "https://sessions.example/v1",
+  projectId,
+  headers: { Authorization: `Bearer ${apiKey}` },
+  onSessionError: (event) => console.error(event.code, event.message),
+});
+
+if (provision.ok) {
+  await connectBrowserSession({
+    mode: "voice",
+    credentials: provision.credentials,
+    customerContext: { userId: "u_123" },
+    onSessionError: (event) => console.error(event.code, event.message),
+  });
+}
+```
+
+Legacy `{ type: "agent_error" }` payloads are mapped to `AGENT_CHILD_CRASHED`. See platform docs for the full error code catalog.

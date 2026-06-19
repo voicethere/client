@@ -1,4 +1,9 @@
 import type { DebugConsole } from "./debug-console.js";
+import {
+  createLocalSessionError,
+  emitSessionError,
+  mapProvisioningFailureCode,
+} from "../session-errors.js";
 
 export type SessionFailureCode =
   | "NOT_DEPLOYED"
@@ -44,6 +49,7 @@ export type StartSessionOptions = {
   pollIntervalMs?: number;
   pollTimeoutMs?: number;
   onStatus?: (status: SessionStatusResponse) => void;
+  onSessionError?: import("../session-errors.js").SessionErrorHandler;
   debug?: DebugConsole;
 };
 
@@ -66,6 +72,7 @@ async function pollSessionStatus(input: {
   pollIntervalMs: number;
   pollTimeoutMs: number;
   onStatus?: (status: SessionStatusResponse) => void;
+  onSessionError?: import("../session-errors.js").SessionErrorHandler;
   debug?: DebugConsole;
 }): Promise<StartSessionResult> {
   const started = Date.now();
@@ -75,10 +82,19 @@ async function pollSessionStatus(input: {
     const res = await fetch(url, { headers: input.headers });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
+      const message = `GET session status failed (${res.status}): ${body}`;
+      emitSessionError(
+        input.onSessionError,
+        createLocalSessionError({
+          code: "PROVISIONING_FAILED",
+          message,
+          sessionId: input.jobId,
+        }),
+      );
       return {
         ok: false,
         code: "HTTP_ERROR",
-        message: `GET session status failed (${res.status}): ${body}`,
+        message,
       };
     }
 
@@ -96,6 +112,19 @@ async function pollSessionStatus(input: {
     }
 
     if (status.status === "failed") {
+      const code = mapProvisioningFailureCode(
+        status.failure_code ?? "ORCHESTRATOR_ERROR",
+      );
+      emitSessionError(
+        input.onSessionError,
+        createLocalSessionError({
+          code,
+          message: status.failure_message ?? "Session provisioning failed",
+          sessionId: input.jobId,
+          projectId: status.project_id,
+          buildId: status.build_id ?? undefined,
+        }),
+      );
       return {
         ok: false,
         code: status.failure_code ?? "ORCHESTRATOR_ERROR",
@@ -106,11 +135,39 @@ async function pollSessionStatus(input: {
     await sleep(input.pollIntervalMs);
   }
 
+  emitSessionError(
+    input.onSessionError,
+    createLocalSessionError({
+      code: "PROVISIONING_TIMEOUT",
+      message: "Session provisioning timed out",
+      sessionId: input.jobId,
+    }),
+  );
   return {
     ok: false,
     code: "TIMEOUT",
     message: "Session provisioning timed out",
   };
+}
+
+function emitProvisionError(
+  options: StartSessionOptions,
+  input: {
+    code: string;
+    message: string;
+    sessionId?: string;
+  },
+): void {
+  emitSessionError(
+    options.onSessionError,
+    createLocalSessionError({
+      code: mapProvisioningFailureCode(input.code),
+      message: input.message,
+      sessionId: input.sessionId ?? options.projectId,
+      projectId: options.projectId,
+      buildId: options.buildId,
+    }),
+  );
 }
 
 /**
@@ -161,10 +218,12 @@ export async function startSession(
 
   if (res.status !== 202) {
     const text = await res.text().catch(() => "");
+    const message = `POST /sessions failed (${res.status}): ${text}`;
+    emitProvisionError(options, { code: "HTTP_ERROR", message });
     return {
       ok: false,
       code: "HTTP_ERROR",
-      message: `POST /sessions failed (${res.status}): ${text}`,
+      message,
     };
   }
 
@@ -176,6 +235,7 @@ export async function startSession(
     pollIntervalMs: options.pollIntervalMs ?? 1000,
     pollTimeoutMs: options.pollTimeoutMs ?? 120_000,
     onStatus: options.onStatus,
+    onSessionError: options.onSessionError,
     debug: options.debug,
   });
 }

@@ -15,6 +15,9 @@ export type ConnectBrowserSessionOptions = {
   peerId?: string;
   audioElement?: HTMLAudioElement;
   onDebugEvent?: DebugConsole;
+  customerContext?: Record<string, unknown>;
+  onSessionError?: import("../session-errors.js").SessionErrorHandler;
+  onControlMessage?: (payload: Record<string, unknown>) => void;
 };
 
 export type BrowserSession = BrowserVoiceSession & {
@@ -31,6 +34,9 @@ export async function connectBrowserSession(
     requestMic,
     audioElement: options.audioElement,
     onDebugEvent: options.onDebugEvent,
+    customerContext: options.customerContext,
+    onSessionError: options.onSessionError,
+    onControlMessage: options.onControlMessage,
   });
 
   return { ...session, mode: options.mode };
@@ -53,6 +59,17 @@ export {
   type BrowserVoiceSessionOptions,
 } from "./browser-voice-session.js";
 export { startSession } from "./session-provision.js";
+export {
+  createLocalSessionError,
+  emitSessionError,
+  isSessionErrorEvent,
+  LOCAL_SESSION_ERROR_CODES,
+  REMOTE_SESSION_ERROR_CODES,
+  SESSION_ERROR_CODES,
+  type SessionErrorCode,
+  type SessionErrorEvent,
+  type SessionErrorHandler,
+} from "../session-errors.js";
 export { attachAudioVisualizer } from "./audio-visualizer.js";
 export { createDebugConsole } from "./debug-console.js";
 

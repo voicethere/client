@@ -2,7 +2,15 @@
 
 ## [Unreleased]
 
-## 0.5.1 — 2026-06-18
+## 0.5.2 — 2026-06-19
+
+### Added
+
+- **`session-errors` module** — shared error codes, `SessionErrorEvent` type, `isSessionErrorEvent`, legacy `agent_error` mapping
+- **`onSessionError`** on `startSession` and `connectBrowserSession` — provisioning failures, WebRTC errors, and runner `session_error` DC events
+- **`customerContext`** on voice/browser sessions — forwarded in `session_hello` for agent `errorHook` context
+- Exports from `@voicethere/client/browser`: `SESSION_ERROR_CODES`, `createLocalSessionError`, `emitSessionError`, related types
+
 
 ### Fixed
 
