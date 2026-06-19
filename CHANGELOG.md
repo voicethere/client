@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.5.4 — 2026-06-19
+
+### Added
+
+- **`micPump`** on `connectBrowserVoiceSession` — `'silent'` (default) or `'external'` so headless load tests can pump scripted PCM via `writeSample` without racing the silent mic loop
+
 ## 0.5.3 — 2026-06-19
 
 ### Added
@@ -24,7 +30,6 @@
 - **`onSessionError`** on `startSession` and `connectBrowserSession` — provisioning failures, WebRTC errors, and runner `session_error` DC events
 - **`customerContext`** on voice/browser sessions — forwarded in `session_hello` for agent `errorHook` context
 - Exports from `@voicethere/client/browser`: `SESSION_ERROR_CODES`, `createLocalSessionError`, `emitSessionError`, related types
-
 
 ### Fixed
 

@@ -31,6 +31,11 @@ export type BrowserVoiceSessionOptions = {
   credentials: SessionCredentials;
   peerId?: string;
   requestMic?: boolean;
+  /**
+   * `silent` (default) — SDK pumps silent 20 ms frames on the mic track after connect.
+   * `external` — caller owns `writeSample` on the mic track (load tests, scripted PCM).
+   */
+  micPump?: "silent" | "external";
   audioElement?: HTMLAudioElement;
   onDebugEvent?: DebugConsole;
   /** Injectable WebRTC runtime (default: browser globals). */
@@ -379,11 +384,14 @@ export async function connectBrowserVoiceSession(
       if (connectionState === "connected") {
         autoReconnectAttempts = 0;
         stopMicPump?.();
-        stopMicPump = createMicPump(
-          micStream,
-          () => pc?.connectionState === "connected",
-          debug,
-        );
+        stopMicPump = null;
+        if (micStream && (options.micPump ?? "silent") === "silent") {
+          stopMicPump = createMicPump(
+            micStream,
+            () => pc?.connectionState === "connected",
+            debug,
+          );
+        }
         resolveConnected?.();
       } else if (connectionState === "failed") {
         stopMicPump?.();
