@@ -35,6 +35,8 @@ export type BrowserVoiceSessionOptions = {
 export type BrowserVoiceSession = {
   peerId: string;
   disconnect: () => void;
+  /** Ask the server to close this WebRTC leg (graceful close signal on voice-control). */
+  sendCloseSignal: (reason?: string) => void;
   sendSpeak: (text: string) => void;
   sendChat: (text: string) => void;
   /** JSON on voice-control (same as sendChat for `{ type: 'chat' }`). */
@@ -79,11 +81,14 @@ async function attachMicTracks(
   micStream: MediaStream,
 ): Promise<void> {
   for (const track of micStream.getAudioTracks()) {
-    const result = pc.addTrack(
-      track as MediaStreamTrack,
-      micStream,
-    ) as RTCRtpSender | Promise<RTCRtpSender> | void;
-    if (result && typeof (result as Promise<RTCRtpSender>).then === "function") {
+    const result = pc.addTrack(track as MediaStreamTrack, micStream) as
+      | RTCRtpSender
+      | Promise<RTCRtpSender>
+      | void;
+    if (
+      result &&
+      typeof (result as Promise<RTCRtpSender>).then === "function"
+    ) {
       await result;
     }
   }
@@ -208,11 +213,7 @@ export async function connectBrowserVoiceSession(
               const view = event.data as ArrayBufferView;
               const copy = new ArrayBuffer(view.byteLength);
               new Uint8Array(copy).set(
-                new Uint8Array(
-                  view.buffer,
-                  view.byteOffset,
-                  view.byteLength,
-                ),
+                new Uint8Array(view.buffer, view.byteOffset, view.byteLength),
               );
               return copy;
             })();
@@ -223,7 +224,9 @@ export async function connectBrowserVoiceSession(
   if (options.requestMic !== false) {
     const getUserMedia = runtime.getUserMedia;
     if (!getUserMedia) {
-      throw new Error("runtime.getUserMedia is required when requestMic is true");
+      throw new Error(
+        "runtime.getUserMedia is required when requestMic is true",
+      );
     }
     micStream = await getUserMedia({
       audio: true,
@@ -257,8 +260,7 @@ export async function connectBrowserVoiceSession(
 
   const wireSync = (channel: RTCDataChannel) => {
     syncChannel = channel;
-    channel.onopen = () =>
-      debug?.info("dc", "open", VOICE_SYNC_CHANNEL_LABEL);
+    channel.onopen = () => debug?.info("dc", "open", VOICE_SYNC_CHANNEL_LABEL);
     channel.onclose = () => {
       debug?.info("dc", "close", VOICE_SYNC_CHANNEL_LABEL);
       syncChannel = null;
@@ -321,15 +323,10 @@ export async function connectBrowserVoiceSession(
           debug,
         );
         resolveConnected?.();
-      } else if (
-        connectionState === "failed" ||
-        connectionState === "closed"
-      ) {
+      } else if (connectionState === "failed" || connectionState === "closed") {
         stopMicPump?.();
         stopMicPump = null;
-        rejectConnected?.(
-          new Error(`peer connection ${connectionState}`),
-        );
+        rejectConnected?.(new Error(`peer connection ${connectionState}`));
       }
     };
 
@@ -407,7 +404,8 @@ export async function connectBrowserVoiceSession(
       connectedPromise,
       new Promise<void>((_, reject) => {
         setTimeout(
-          () => reject(new Error(`WebRTC connect timeout after ${timeoutMs}ms`)),
+          () =>
+            reject(new Error(`WebRTC connect timeout after ${timeoutMs}ms`)),
           timeoutMs,
         );
       }),
@@ -438,6 +436,15 @@ export async function connectBrowserVoiceSession(
     sendSyncBinary: (data: ArrayBuffer | Uint8Array) => {
       requireOpenSync().send(toArrayBuffer(data));
       debug?.debug("dc", "binary_send", `sync:${data.byteLength}b`);
+    },
+    sendCloseSignal: (reason?: string) => {
+      requireOpenControl().send(
+        JSON.stringify({
+          type: "session_close",
+          ...(reason ? { reason } : {}),
+        }),
+      );
+      debug?.info("session", "close_signal", reason ?? "");
     },
     disconnect: () => {
       stopMicPump?.();

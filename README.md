@@ -4,10 +4,10 @@ Browser and Node client for VoiceThere voice sessions.
 
 ## Modes
 
-| Mode | When | Signaling URL |
-|------|------|---------------|
-| **local** | Local dev — agent runner on localhost | `ws://127.0.0.1:8080/ws` |
-| **cloud** | Hosted VoiceThere sessions | `wss://signaling…/ws?token=<joinToken>` |
+| Mode      | When                                  | Signaling URL                           |
+| --------- | ------------------------------------- | --------------------------------------- |
+| **local** | Local dev — agent runner on localhost | `ws://127.0.0.1:8080/ws`                |
+| **cloud** | Hosted VoiceThere sessions            | `wss://signaling…/ws?token=<joinToken>` |
 
 Wire protocol: [`@node-webrtc-rust/signaling`](https://www.npmjs.com/package/@node-webrtc-rust/signaling).
 
@@ -72,3 +72,15 @@ npm run demo:browser
 ```
 
 See [`examples/browser-test/README.md`](examples/browser-test/README.md).
+
+## Ending a session
+
+| Action                | API                                | Server `end_reason`   |
+| --------------------- | ---------------------------------- | --------------------- |
+| Local teardown        | `session.disconnect()`             | `client_disconnected` |
+| Graceful close signal | `session.sendCloseSignal(reason?)` | `client_close_signal` |
+| Server idle timeout   | _(automatic)_                      | `idle_timeout`        |
+
+In `@voicethere/agent`, call `disconnectClient(sessionId, { reason })` to kick a peer from agent code (e.g. stale multiplayer state).
+
+Configure idle timeouts per project in the dashboard **Session settings** panel or `voicethere projects session-settings set`.
