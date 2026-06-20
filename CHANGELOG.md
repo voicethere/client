@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## 0.5.5 — 2026-06-20
+
+### Fixed
+
+- **`waitForConnected` after transport failure** — clear the internal connect promise when the peer connection enters `failed` or `closed` so same-session auto-reconnect and a subsequent `waitForConnected()` can succeed instead of hanging on a stale rejected promise.
+- **`micPump: "external"` Node connect** — send a short PCM kick on mic attach (before answer handling) so headless load tests emit RTP during ICE like the default silent pump.
+
 ## 0.5.4 — 2026-06-19
 
 ### Added

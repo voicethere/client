@@ -405,6 +405,9 @@ export async function connectBrowserVoiceSession(
           occurred_at: new Date().toISOString(),
         });
         rejectConnected?.(new Error(`peer connection ${connectionState}`));
+        connectedPromise = null;
+        resolveConnected = null;
+        rejectConnected = null;
         scheduleAutoReconnect("webrtc_failed");
       } else if (connectionState === "closed") {
         stopMicPump?.();
@@ -421,11 +424,24 @@ export async function connectBrowserVoiceSession(
           scheduleAutoReconnect("webrtc_closed");
         }
         rejectConnected?.(new Error(`peer connection ${connectionState}`));
+        connectedPromise = null;
+        resolveConnected = null;
+        rejectConnected = null;
       }
     };
 
     if (micStream) {
       await attachMicTracks(pc, micStream);
+      if ((options.micPump ?? "silent") === "external") {
+        for (const track of micStream.getAudioTracks()) {
+          if (isWriteSampleTrack(track)) {
+            void track
+              .writeSample(new Uint8Array(960), 5)
+              .catch(() => undefined);
+            debug?.info("voice", "mic_kick_sent");
+          }
+        }
+      }
     }
 
     await pc.setRemoteDescription(sdp);
