@@ -13,6 +13,18 @@ import {
   type WebRtcRuntime,
 } from "./webrtc-runtime.js";
 
+function redactSignalingUrlForLog(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.searchParams.has("token")) {
+      parsed.searchParams.set("token", "…");
+    }
+    return parsed.toString();
+  } catch {
+    return url.split("?")[0] ?? url;
+  }
+}
+
 export const VOICE_AGENT_SERVER_PEER_ID = "voice-agent-server";
 export const VOICE_CONTROL_CHANNEL_LABEL = "voice-control";
 /** High-frequency binary sync channel (matches `@node-webrtc-rust/sdk/voice`). */
@@ -29,6 +41,15 @@ export type ReconnectPolicy = "same-session" | "new-session";
 
 export type BrowserVoiceSessionOptions = {
   credentials: SessionCredentials;
+  /**
+   * Signaling peer id for this browser tab. Default: `client-<random>`.
+   *
+   * **VoiceThere runners** (`VoiceAgentSessionHost` / `SessionPod`) only negotiate
+   * WebRTC with peers whose id starts with `client-` unless the server sets a
+   * custom `clientPeerIdPrefix`. Other ids join signaling but never get an SDP offer.
+   *
+   * @see https://github.com/akirilyuk/node-webrtc-rust/blob/main/docs/signaling-peer-ids.md
+   */
   peerId?: string;
   requestMic?: boolean;
   /**
@@ -48,6 +69,11 @@ export type BrowserVoiceSessionOptions = {
   onControlMessage?: (payload: Record<string, unknown>) => void;
   /** Fired for binary frames on voice-control or voicethere-sync. */
   onBinaryMessage?: BinaryMessageHandler;
+  /**
+   * Fired when the agent's remote audio track arrives (Node: {@link @node-webrtc-rust/sdk} RemoteAudioTrack).
+   * Use for client-side STT on agent TTS playback (e2e voice-smoke, load tests).
+   */
+  onAgentAudioTrack?: (track: MediaStreamTrack) => void;
   /**
    * `same-session` (default) retries signaling/WebRTC with the same credentials on
    * unintentional disconnect. `new-session` disables auto-retry — call `startSession()`
@@ -357,6 +383,7 @@ export async function connectBrowserVoiceSession(
         options.audioElement.srcObject = stream;
         void options.audioElement.play().catch(() => undefined);
       }
+      options.onAgentAudioTrack?.(event.track);
       debug?.info("webrtc", "agent_audio_track");
     };
 
@@ -428,6 +455,22 @@ export async function connectBrowserVoiceSession(
         resolveConnected = null;
         rejectConnected = null;
       }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      debug?.info(
+        "webrtc",
+        "ice_connection_state",
+        pc?.iceConnectionState ?? "unknown",
+      );
+    };
+
+    pc.onicegatheringstatechange = () => {
+      debug?.info(
+        "webrtc",
+        "ice_gathering_state",
+        pc?.iceGatheringState ?? "unknown",
+      );
     };
 
     if (micStream) {
@@ -528,10 +571,14 @@ export async function connectBrowserVoiceSession(
       if (!ws) return reject(new Error("WebSocket missing"));
       ws.onopen = () => {
         sendSignal({ type: "join", room: roomId, peerId });
+        debug?.info("signaling", "join_sent", `room=${roomId} peer=${peerId}`);
         debug?.info("signaling", "rejoined", roomId);
         resolve();
       };
-      ws.onerror = () => reject(new Error("WebSocket error"));
+      ws.onerror = () => {
+        debug?.error("signaling", "ws_error", redactSignalingUrlForLog(signalingUrl));
+        reject(new Error("WebSocket error"));
+      };
     });
     attachWsMessageHandler();
     ws.onclose = () => {

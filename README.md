@@ -93,6 +93,18 @@ Billing starts when the runner reports a billable WebRTC leg (voice: connected P
 
 Pass `reconnectPolicy: "new-session"` to disable automatic same-session retry.
 
+## Signaling `peerId` (voice sessions)
+
+When connecting to a **VoiceThere runner** or any server using `@node-webrtc-rust/helpers` `VoiceAgentSessionHost`:
+
+- **Omit `peerId`** — the SDK generates `client-<random>` (recommended).
+- **Or** pass an explicit id that **starts with `client-`** (e.g. `client-tab1`).
+- **Do not** use bare labels like `user-1` or `steady-worker-3` — signaling join succeeds but the server ignores the peer and **never sends a WebRTC offer**.
+
+Same `peerId` must be reused for `reconnectPolicy: "same-session"`.
+
+Library reference: [`node-webrtc-rust/docs/signaling-peer-ids.md`](https://github.com/akirilyuk/node-webrtc-rust/blob/main/docs/signaling-peer-ids.md).
+
 In `@voicethere/agent`, call `disconnectClient(sessionId, { reason })` to kick a peer from agent code (e.g. stale multiplayer state).
 
 Configure idle timeouts per project in the dashboard **Session settings** panel or `voicethere projects session-settings set`.

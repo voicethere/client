@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`onDebugEvent` ICE tracing** — `webrtc/ice_connection_state`, `webrtc/ice_gathering_state`, and `signaling/join_sent` for headless E2E connect diagnostics.
+
 ## 0.5.5 — 2026-06-20
 
 ### Fixed
