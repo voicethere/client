@@ -2,9 +2,15 @@
 
 ## [Unreleased]
 
+## 0.5.6 — 2026-06-23
+
 ### Added
 
 - **`onDebugEvent` ICE tracing** — `webrtc/ice_connection_state`, `webrtc/ice_gathering_state`, and `signaling/join_sent` for headless E2E connect diagnostics.
+
+### Changed
+
+- **Dependencies** — `@node-webrtc-rust/signaling@0.6.2`; peer `@node-webrtc-rust/sdk` `>=0.6.2`.
 
 ## 0.5.5 — 2026-06-20
 
