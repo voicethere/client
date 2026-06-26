@@ -134,3 +134,22 @@ if (provision.ok) {
 ```
 
 Legacy `{ type: "agent_error" }` payloads are mapped to `AGENT_CHILD_CRASHED`. See platform docs for the full error code catalog.
+
+### Root connection error handler
+
+For process-wide logging (signaling socket drops, WebRTC failures, and session errors) without
+attaching `.on('error')` on every connection, register once:
+
+```typescript
+import {
+  setRootConnectionErrorHandler,
+  connectBrowserSession,
+} from "@voicethere/client/browser";
+
+setRootConnectionErrorHandler((error) => {
+  console.error(error.source.subsystem, error.source, error.message);
+});
+```
+
+`onSessionError` still runs for per-session UI. Details:
+[node-webrtc-rust `docs/connection-errors.md`](https://github.com/akirilyuk/node-webrtc-rust/blob/main/docs/connection-errors.md).
