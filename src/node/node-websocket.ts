@@ -1,5 +1,10 @@
 import { WebSocket as NodeWebSocket } from "ws";
 
+import {
+  createConnectionError,
+  dispatchConnectionError,
+} from "@node-webrtc-rust/sdk";
+
 /**
  * Minimal WebSocket wrapper matching the browser API used by browser-voice-session.
  */
@@ -15,8 +20,10 @@ export class NodeWebSocketAdapter {
   onclose: (() => void) | null = null;
 
   private readonly ws: NodeWebSocket;
+  private readonly url: string;
 
   constructor(url: string, _protocols?: string | string[]) {
+    this.url = url;
     this.ws = new NodeWebSocket(url);
     this.readyState = this.ws.readyState;
 
@@ -24,7 +31,20 @@ export class NodeWebSocketAdapter {
       this.readyState = NodeWebSocket.OPEN;
       this.onopen?.();
     });
-    this.ws.on("error", () => {
+    this.ws.on("error", (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      dispatchConnectionError(
+        createConnectionError(
+          message,
+          {
+            subsystem: "signaling",
+            phase: "socket",
+            url: this.url,
+          },
+          error,
+        ),
+        { fallbackLog: false },
+      );
       this.onerror?.();
     });
     this.ws.on("message", (data) => {

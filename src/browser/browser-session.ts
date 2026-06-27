@@ -77,6 +77,16 @@ export {
   type SessionErrorEvent,
   type SessionErrorHandler,
 } from "../session-errors.js";
+export {
+  ConnectionError,
+  createConnectionError,
+  formatConnectionErrorSource,
+  getRootConnectionErrorHandler,
+  reportConnectionError,
+  setRootConnectionErrorHandler,
+  type ConnectionErrorSource,
+  type RootConnectionErrorHandler,
+} from "@node-webrtc-rust/sdk";
 export { attachAudioVisualizer } from "./audio-visualizer.js";
 export { createDebugConsole } from "./debug-console.js";
 
