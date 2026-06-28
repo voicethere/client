@@ -18,6 +18,9 @@ export type ConnectBrowserSessionOptions = {
   customerContext?: Record<string, unknown>;
   onSessionError?: import("../session-errors.js").SessionErrorHandler;
   onControlMessage?: (payload: Record<string, unknown>) => void;
+  onBinaryMessage?: BrowserVoiceSessionOptions["onBinaryMessage"];
+  onSyncBinaryMessage?: BrowserVoiceSessionOptions["onSyncBinaryMessage"];
+  onAgentAudioTrack?: BrowserVoiceSessionOptions["onAgentAudioTrack"];
   reconnectPolicy?: import("./browser-voice-session.js").ReconnectPolicy;
   maxAutoReconnectAttempts?: number;
   onReconnecting?: (attempt: number) => void;
@@ -40,6 +43,9 @@ export async function connectBrowserSession(
     customerContext: options.customerContext,
     onSessionError: options.onSessionError,
     onControlMessage: options.onControlMessage,
+    onBinaryMessage: options.onBinaryMessage,
+    onSyncBinaryMessage: options.onSyncBinaryMessage,
+    onAgentAudioTrack: options.onAgentAudioTrack,
     reconnectPolicy: options.reconnectPolicy,
     maxAutoReconnectAttempts: options.maxAutoReconnectAttempts,
     onReconnecting: options.onReconnecting,
@@ -61,6 +67,7 @@ export {
   VOICE_SYNC_CHANNEL_LABEL,
   VOICE_CONTROL_CHANNEL_LABEL,
   type BinaryMessageHandler,
+  type SyncBinaryMessageHandler,
   type DataChannelKind,
   type BrowserVoiceSession,
   type BrowserVoiceSessionOptions,
