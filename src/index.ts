@@ -40,7 +40,7 @@ export {
   setRootConnectionErrorHandler,
   type ConnectionErrorSource,
   type RootConnectionErrorHandler,
-} from "@node-webrtc-rust/sdk";
+} from "./connection-errors.js";
 export type {
   CloudSessionCredentials,
   VoiceThereClientOptions,

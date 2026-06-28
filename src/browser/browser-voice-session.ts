@@ -1,4 +1,4 @@
-import { createConnectionError, dispatchConnectionError } from "@node-webrtc-rust/sdk";
+import { createConnectionError, dispatchConnectionError } from "../connection-errors.js";
 
 import { appendJoinToken } from "../resolve-connection.js";
 import {

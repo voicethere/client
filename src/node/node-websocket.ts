@@ -3,7 +3,7 @@ import { WebSocket as NodeWebSocket } from "ws";
 import {
   createConnectionError,
   dispatchConnectionError,
-} from "@node-webrtc-rust/sdk";
+} from "../connection-errors.js";
 
 /**
  * Minimal WebSocket wrapper matching the browser API used by browser-voice-session.
