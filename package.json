@@ -1,6 +1,6 @@
 {
   "name": "@voicethere/client",
-  "version": "0.5.7",
+  "version": "0.6.0",
   "description": "VoiceThere browser/Node client — cloud gateway, browser voice/chat, embed widget",
   "type": "module",
   "exports": {

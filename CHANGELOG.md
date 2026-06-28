@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## 0.6.0 — 2026-06-28
+
+### Changed
+
+- **Browser dependency boundary** — browser-facing client entrypoints no longer import or re-export `@node-webrtc-rust/sdk`, preventing accidental native bindings resolution in CDN/browser builds.
+- **Local connection error surface** — moved shared connection error helpers into client-local sources so browser/session modules stay signaling-only.
+
+### Added
+
+- **Boundary regression tests** — added tests that fail if browser-facing sources reintroduce `@node-webrtc-rust/sdk` imports.
+
 ## 0.5.7 — 2026-06-28
 
 ### Added
