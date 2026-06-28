@@ -31,6 +31,16 @@ export async function connectVoiceSession(
 }
 
 export { appendJoinToken, resolveConnection } from "./resolve-connection.js";
+export {
+  ConnectionError,
+  createConnectionError,
+  formatConnectionErrorSource,
+  getRootConnectionErrorHandler,
+  reportConnectionError,
+  setRootConnectionErrorHandler,
+  type ConnectionErrorSource,
+  type RootConnectionErrorHandler,
+} from "@node-webrtc-rust/sdk";
 export type {
   CloudSessionCredentials,
   VoiceThereClientOptions,

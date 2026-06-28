@@ -1,3 +1,5 @@
+import { createConnectionError, dispatchConnectionError } from "@node-webrtc-rust/sdk";
+
 import { appendJoinToken } from "../resolve-connection.js";
 import {
   emitSessionError,
@@ -576,6 +578,15 @@ export async function connectBrowserVoiceSession(
         resolve();
       };
       ws.onerror = () => {
+        dispatchConnectionError(
+          createConnectionError("WebSocket error", {
+            subsystem: "webrtc",
+            sessionId: orchestratorSessionId,
+            peerId,
+            kind: "signaling-ws",
+          }),
+          { fallbackLog: false },
+        );
         debug?.error("signaling", "ws_error", redactSignalingUrlForLog(signalingUrl));
         reject(new Error("WebSocket error"));
       };

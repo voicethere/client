@@ -5,6 +5,11 @@
  * Local codes are emitted by the client for provisioning/WebRTC failures.
  */
 
+import {
+  createConnectionError,
+  reportConnectionError,
+} from "@node-webrtc-rust/sdk";
+
 export const REMOTE_SESSION_ERROR_CODES = [
   "AGENT_HANDLER_FAILED",
   "AGENT_CHILD_CRASHED",
@@ -108,5 +113,14 @@ export function emitSessionError(
   handler: SessionErrorHandler | undefined,
   event: SessionErrorEvent,
 ): void {
+  reportConnectionError(
+    createConnectionError(event.message, {
+      subsystem: "session",
+      sessionId: event.session_id,
+      code: event.code,
+      ...(event.project_id ? { projectId: event.project_id } : {}),
+      ...(event.build_id ? { buildId: event.build_id } : {}),
+    }),
+  );
   handler?.(event);
 }

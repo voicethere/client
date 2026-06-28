@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  ConnectionError,
+  setRootConnectionErrorHandler,
+} from "@node-webrtc-rust/sdk";
 
 import {
   createLocalSessionError,
+  emitSessionError,
   isSessionErrorEvent,
   mapProvisioningFailureCode,
   parseLegacyAgentError,
@@ -49,5 +55,30 @@ describe("session-errors", () => {
     });
     expect(event.code).toBe("WEBRTC_CONNECTION_FAILED");
     expect(event.project_id).toBe("p1");
+  });
+
+  it("bubbles session errors to the root connection handler", () => {
+    const root = vi.fn();
+    setRootConnectionErrorHandler(root);
+    const perSession = vi.fn();
+    const event = createLocalSessionError({
+      code: "WEBRTC_CONNECTION_FAILED",
+      message: "pc failed",
+      sessionId: "s1",
+    });
+
+    emitSessionError(perSession, event);
+
+    expect(root).toHaveBeenCalledOnce();
+    const tagged = root.mock.calls[0]![0];
+    expect(ConnectionError.is(tagged)).toBe(true);
+    expect(tagged.source).toMatchObject({
+      subsystem: "session",
+      sessionId: "s1",
+      code: "WEBRTC_CONNECTION_FAILED",
+    });
+    expect(perSession).toHaveBeenCalledWith(event);
+
+    setRootConnectionErrorHandler(undefined);
   });
 });
