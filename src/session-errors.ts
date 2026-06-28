@@ -8,7 +8,7 @@
 import {
   createConnectionError,
   reportConnectionError,
-} from "@node-webrtc-rust/sdk";
+} from "./connection-errors.js";
 
 export const REMOTE_SESSION_ERROR_CODES = [
   "AGENT_HANDLER_FAILED",

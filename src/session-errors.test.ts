@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ConnectionError,
   setRootConnectionErrorHandler,
-} from "@node-webrtc-rust/sdk";
+} from "../src/connection-errors.js";
 
 import {
   createLocalSessionError,

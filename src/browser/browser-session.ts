@@ -86,7 +86,7 @@ export {
   setRootConnectionErrorHandler,
   type ConnectionErrorSource,
   type RootConnectionErrorHandler,
-} from "@node-webrtc-rust/sdk";
+} from "../connection-errors.js";
 export { attachAudioVisualizer } from "./audio-visualizer.js";
 export { createDebugConsole } from "./debug-console.js";
 
