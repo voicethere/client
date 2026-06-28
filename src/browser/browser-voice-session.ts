@@ -34,10 +34,10 @@ export const VOICE_SYNC_CHANNEL_LABEL = "voicethere-sync";
 
 export type DataChannelKind = "control" | "sync";
 
-export type BinaryMessageHandler = (
-  data: ArrayBuffer,
-  channel: DataChannelKind,
-) => void;
+/** Fired for binary frames on voice-control data channel. */
+export type BinaryMessageHandler = (data: ArrayBuffer) => void;
+/** Fired for binary frames on voicethere-sync data channel. */
+export type SyncBinaryMessageHandler = (data: ArrayBuffer) => void;
 
 export type ReconnectPolicy = "same-session" | "new-session";
 
@@ -69,8 +69,10 @@ export type BrowserVoiceSessionOptions = {
   onSessionError?: SessionErrorHandler;
   /** Fired for JSON messages on voice-control (e.g. speech_event). */
   onControlMessage?: (payload: Record<string, unknown>) => void;
-  /** Fired for binary frames on voice-control or voicethere-sync. */
+  /** Fired for binary frames on voice-control. */
   onBinaryMessage?: BinaryMessageHandler;
+  /** Fired for binary frames on voicethere-sync. */
+  onSyncBinaryMessage?: SyncBinaryMessageHandler;
   /**
    * Fired when the agent's remote audio track arrives (Node: {@link @node-webrtc-rust/sdk} RemoteAudioTrack).
    * Use for client-side STT on agent TTS playback (e2e voice-smoke, load tests).
@@ -252,7 +254,11 @@ export async function connectBrowserVoiceSession(
 
   const dispatchBinary = (data: ArrayBuffer, channel: DataChannelKind) => {
     debug?.debug("dc", "binary", `${channel}:${data.byteLength}b`);
-    options.onBinaryMessage?.(data, channel);
+    if (channel === "sync") {
+      options.onSyncBinaryMessage?.(data);
+      return;
+    }
+    options.onBinaryMessage?.(data);
   };
 
   const handleControlJson = (raw: string) => {
