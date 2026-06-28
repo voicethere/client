@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## 0.6.1 — 2026-06-28
+
+### Fixed
+
+- **Browser session wrapper callback forwarding** — `connectBrowserSession` now forwards `onAgentAudioTrack`, `onBinaryMessage`, and `onSyncBinaryMessage` to the voice session layer.
+
+### Added
+
+- **Split binary receive callbacks** — browser voice sessions now support a dedicated `onSyncBinaryMessage` callback for `voicethere-sync`, while `onBinaryMessage` handles `voice-control` binary frames.
+- **Regression coverage** — added tests to lock callback forwarding and channel-specific binary routing.
+
 ## 0.6.0 — 2026-06-28
 
 ### Changed
