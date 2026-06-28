@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.5.7 — 2026-06-28
+
+### Added
+
+- **Root connection error handler surface** — session and signaling transport errors now bubble to the process-wide root connection error handler so apps can centralize telemetry/logging without wiring `.on("error")` on every connection.
+
 ## 0.5.6 — 2026-06-23
 
 ### Added
