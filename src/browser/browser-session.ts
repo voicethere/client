@@ -6,11 +6,14 @@ import {
   type BrowserVoiceSession,
   type BrowserVoiceSessionOptions,
 } from "./browser-voice-session.js";
-
-export type BrowserSessionMode = "voice" | "chat" | "both";
+import {
+  BrowserSessionModeType,
+  ProvisionedRunnerModeType,
+  type BrowserSessionMode,
+} from "./session-modes.js";
 
 export type ConnectBrowserSessionOptions = {
-  mode: BrowserSessionMode;
+  mode?: BrowserSessionMode;
   credentials: SessionCredentials;
   peerId?: string;
   audioElement?: HTMLAudioElement;
@@ -33,7 +36,26 @@ export type BrowserSession = BrowserVoiceSession & {
 export async function connectBrowserSession(
   options: ConnectBrowserSessionOptions,
 ): Promise<BrowserSession> {
-  const requestMic = options.mode === "voice" || options.mode === "both";
+  const serverMode: BrowserSessionMode =
+    options.credentials.mode === ProvisionedRunnerModeType.Data
+      ? BrowserSessionModeType.Chat
+      : options.credentials.mode;
+  const resolvedMode = options.mode ?? serverMode;
+  if (
+    serverMode === BrowserSessionModeType.Chat &&
+    resolvedMode !== BrowserSessionModeType.Chat
+  ) {
+    throw new Error("Session mode mismatch: server provisioned data mode");
+  }
+  if (
+    serverMode === BrowserSessionModeType.Voice &&
+    resolvedMode !== BrowserSessionModeType.Voice
+  ) {
+    throw new Error("Session mode mismatch: server provisioned voice mode");
+  }
+  const requestMic =
+    resolvedMode === BrowserSessionModeType.Voice ||
+    resolvedMode === BrowserSessionModeType.VoiceAndData;
   const session = await connectBrowserVoiceSession({
     credentials: options.credentials,
     peerId: options.peerId,
@@ -51,7 +73,7 @@ export async function connectBrowserSession(
     onReconnecting: options.onReconnecting,
   });
 
-  return { ...session, mode: options.mode };
+  return { ...session, mode: resolvedMode };
 }
 
 export async function connectDataSession(
@@ -103,6 +125,12 @@ export type {
   StartSessionOptions,
   StartSessionResult,
 } from "./session-provision.js";
+export {
+  BrowserSessionModeType,
+  ProvisionedRunnerModeType,
+  type BrowserSessionMode,
+  type ProvisionedRunnerMode,
+} from "./session-modes.js";
 
 export type { DebugConsole, DebugEvent } from "./debug-console.js";
 export type { WebRtcRuntime } from "./webrtc-runtime.js";

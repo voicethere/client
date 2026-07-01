@@ -1,5 +1,9 @@
 import type { DebugConsole } from "./debug-console.js";
 import {
+  ProvisionedRunnerModeType,
+  type ProvisionedRunnerMode,
+} from "./session-modes.js";
+import {
   createLocalSessionError,
   emitSessionError,
   mapProvisioningFailureCode,
@@ -16,6 +20,7 @@ export type SessionJobStatus = "queued" | "provisioning" | "ready" | "failed";
 
 export type SessionCredentials = {
   session_id: string;
+  mode: ProvisionedRunnerMode;
   join_token: string;
   signaling_url: string;
   room_id: string;
@@ -108,7 +113,14 @@ async function pollSessionStatus(input: {
     );
 
     if (status.status === "ready" && status.credentials) {
-      return { ok: true, credentials: status.credentials, jobId: input.jobId };
+      return {
+        ok: true,
+        credentials: {
+          ...status.credentials,
+          mode: status.credentials.mode ?? ProvisionedRunnerModeType.Voice,
+        },
+        jobId: input.jobId,
+      };
     }
 
     if (status.status === "failed") {
@@ -206,6 +218,7 @@ export async function startSession(
       ok: true,
       credentials: {
         session_id: sync.session_id,
+        mode: sync.mode ?? ProvisionedRunnerModeType.Voice,
         join_token: sync.join_token,
         signaling_url: sync.signaling_url,
         room_id: sync.room_id,
