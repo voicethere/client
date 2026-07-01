@@ -1,4 +1,5 @@
 import {
+  BrowserSessionModeType,
   createDebugConsole,
   startSession,
 } from "../browser/browser-session.js";
@@ -32,7 +33,7 @@ export function createVoiceThereWidget(
   options: VoiceThereWidgetOptions,
 ): VoiceThereWidget {
   const mount = options.mount ?? document.body;
-  const mode = options.mode ?? "chat";
+  const mode = options.mode ?? BrowserSessionModeType.Chat;
   const theme = options.theme ?? {};
 
   const root = document.createElement("div");

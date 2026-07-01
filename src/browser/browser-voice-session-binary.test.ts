@@ -108,6 +108,7 @@ describe("connectBrowserVoiceSession binary callback routing", () => {
     await connectBrowserVoiceSession({
       credentials: {
         session_id: "s",
+        mode: "voice",
         room_id: "r",
         join_token: "j",
         signaling_url: "ws://127.0.0.1:8080/ws",

@@ -37,6 +37,7 @@ describe("connectBrowserSession", () => {
       mode: "voice",
       credentials: {
         session_id: "s",
+        mode: "voice",
         room_id: "r",
         join_token: "j",
         signaling_url: "ws://127.0.0.1:8080/ws",
@@ -59,5 +60,40 @@ describe("connectBrowserSession", () => {
       }),
     );
     expect(session.mode).toBe("voice");
+  });
+
+  it("defaults to server-provided mode when mode is omitted", async () => {
+    const baseSession = {
+      peerId: "client-test",
+      disconnect: vi.fn(),
+      sendCloseSignal: vi.fn(),
+      sendSpeak: vi.fn(),
+      sendChat: vi.fn(),
+      sendToAgent: vi.fn(),
+      sendBinary: vi.fn(),
+      sendSyncBinary: vi.fn(),
+      getMicStream: () => null,
+      waitForConnected: vi.fn(async () => undefined),
+      getConnectionState: () => "new" as const,
+      reconnect: vi.fn(async () => undefined),
+    };
+    connectBrowserVoiceSession.mockResolvedValue(baseSession);
+
+    const session = await connectBrowserSession({
+      credentials: {
+        session_id: "s",
+        mode: "data",
+        room_id: "r",
+        join_token: "j",
+        signaling_url: "ws://127.0.0.1:8080/ws",
+        ice_servers: [],
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      },
+    });
+
+    expect(connectBrowserVoiceSession).toHaveBeenCalledWith(
+      expect.objectContaining({ requestMic: false }),
+    );
+    expect(session.mode).toBe("chat");
   });
 });
