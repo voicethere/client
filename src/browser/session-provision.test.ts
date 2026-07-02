@@ -22,6 +22,9 @@ describe("session provision state machine", () => {
       project_id: "550e8400-e29b-41d4-a716-446655440000",
       build_id: null,
       queue_position: 2,
+      waiting_since: "2026-07-01T10:00:00.000Z",
+      waiting_expires_at: "2026-07-01T12:00:00.000Z",
+      estimated_wait_seconds: 120,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };

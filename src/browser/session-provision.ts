@@ -13,6 +13,7 @@ export type SessionFailureCode =
   | "NOT_DEPLOYED"
   | "RUNNER_UNAVAILABLE"
   | "CAPACITY_EXCEEDED"
+  | "CAPACITY_WAIT_EXPIRED"
   | "ORCHESTRATOR_ERROR"
   | "JOIN_TOKEN_ERROR"
   | "TIMEOUT";
@@ -46,6 +47,14 @@ export type SessionStatusResponse = {
   failure_code?: SessionFailureCode | null;
   failure_message?: string | null;
   queue_position?: number | null;
+  /** ISO timestamp when the job entered the capacity wait queue. */
+  waiting_since?: string | null;
+  /** Sliding deadline — extended on each poll while `waiting`. */
+  waiting_expires_at?: string | null;
+  /** Last GET /sessions/:id poll while waiting (keepalive). */
+  queue_last_seen_at?: string | null;
+  /** Rough ETA in seconds based on queue position. */
+  estimated_wait_seconds?: number | null;
   credentials?: SessionCredentials | null;
   created_at: string;
   updated_at: string;
@@ -58,8 +67,8 @@ export type StartSessionOptions = {
   buildId?: string;
   async?: boolean;
   /**
-   * When true (default), the session service places the job in a capacity wait
-   * queue instead of failing immediately when runner slots are full.
+   * When true (default), poll GET /v1/sessions/:id while waiting — each poll
+   * keeps your queue place (sliding TTL, default 120 minutes without polls).
    */
   waitForCapacity?: boolean;
   headers?: Record<string, string>;
