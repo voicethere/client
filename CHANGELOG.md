@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## 0.7.0 — 2026-07-03
+
+### Added
+
+- **Typed session modes** — `ProvisionedRunnerModeType` / `BrowserSessionModeType` enums and matching type aliases for runner (`voice`, `data`, `voice+data`) vs browser (`voice`, `chat`, `voice+data`) session modes.
+- **`mode` on session credentials** — provisioning responses now include the server-runner mode; defaults to `voice` when omitted.
+- **`mode` on `connectBrowserSession`** — optional client mode with server mismatch guards; resolved `mode` is returned on `BrowserSession`.
+- **Embed widget `mode` option** — `createVoiceThereWidget` accepts `mode` (defaults to `chat`).
+- **Public exports** — session mode types exported from `@voicethere/client/browser`, `@voicethere/client/embed`, and `@voicethere/client/node`.
+
+### Changed
+
+- **`connectBrowserSession` mic request** — `requestMic` is derived from resolved mode (`voice` and `voice+data` request mic; data-only provisioning maps to `chat` without mic).
+
 ## 0.6.1 — 2026-06-28
 
 ### Fixed
