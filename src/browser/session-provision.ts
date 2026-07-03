@@ -1,5 +1,9 @@
 import type { DebugConsole } from "./debug-console.js";
 import {
+  ProvisionedRunnerModeType,
+  type ProvisionedRunnerMode,
+} from "./session-modes.js";
+import {
   createLocalSessionError,
   emitSessionError,
   mapProvisioningFailureCode,
@@ -8,14 +12,22 @@ import {
 export type SessionFailureCode =
   | "NOT_DEPLOYED"
   | "RUNNER_UNAVAILABLE"
+  | "CAPACITY_EXCEEDED"
+  | "CAPACITY_WAIT_EXPIRED"
   | "ORCHESTRATOR_ERROR"
   | "JOIN_TOKEN_ERROR"
   | "TIMEOUT";
 
-export type SessionJobStatus = "queued" | "provisioning" | "ready" | "failed";
+export type SessionJobStatus =
+  | "queued"
+  | "waiting"
+  | "provisioning"
+  | "ready"
+  | "failed";
 
 export type SessionCredentials = {
   session_id: string;
+  mode: ProvisionedRunnerMode;
   join_token: string;
   signaling_url: string;
   room_id: string;
@@ -34,6 +46,15 @@ export type SessionStatusResponse = {
   build_id: string | null;
   failure_code?: SessionFailureCode | null;
   failure_message?: string | null;
+  queue_position?: number | null;
+  /** ISO timestamp when the job entered the capacity wait queue. */
+  waiting_since?: string | null;
+  /** Sliding deadline — extended on each poll while `waiting`. */
+  waiting_expires_at?: string | null;
+  /** Last GET /sessions/:id poll while waiting (keepalive). */
+  queue_last_seen_at?: string | null;
+  /** Rough ETA in seconds based on queue position. */
+  estimated_wait_seconds?: number | null;
   credentials?: SessionCredentials | null;
   created_at: string;
   updated_at: string;
@@ -45,10 +66,17 @@ export type StartSessionOptions = {
   projectId: string;
   buildId?: string;
   async?: boolean;
+  /**
+   * When true (default), poll GET /v1/sessions/:id while waiting — each poll
+   * keeps your queue place (sliding TTL, default 120 minutes without polls).
+   */
+  waitForCapacity?: boolean;
   headers?: Record<string, string>;
   pollIntervalMs?: number;
   pollTimeoutMs?: number;
   onStatus?: (status: SessionStatusResponse) => void;
+  /** Called when status is `waiting` and queue_position is present. */
+  onQueuePosition?: (position: number, status: SessionStatusResponse) => void;
   onSessionError?: import("../session-errors.js").SessionErrorHandler;
   debug?: DebugConsole;
 };
@@ -61,6 +89,14 @@ export type StartSessionResult =
       message: string;
     };
 
+export function isTerminalSessionJobStatus(status: SessionJobStatus): boolean {
+  return status === "ready" || status === "failed";
+}
+
+export function isCapacityWaitStatus(status: SessionStatusResponse): boolean {
+  return status.status === "waiting";
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -72,6 +108,7 @@ async function pollSessionStatus(input: {
   pollIntervalMs: number;
   pollTimeoutMs: number;
   onStatus?: (status: SessionStatusResponse) => void;
+  onQueuePosition?: (position: number, status: SessionStatusResponse) => void;
   onSessionError?: import("../session-errors.js").SessionErrorHandler;
   debug?: DebugConsole;
 }): Promise<StartSessionResult> {
@@ -100,6 +137,13 @@ async function pollSessionStatus(input: {
 
     const status = (await res.json()) as SessionStatusResponse;
     input.onStatus?.(status);
+    if (
+      status.status === "waiting" &&
+      status.queue_position != null &&
+      status.queue_position > 0
+    ) {
+      input.onQueuePosition?.(status.queue_position, status);
+    }
     input.debug?.info(
       "provision",
       status.status,
@@ -108,7 +152,14 @@ async function pollSessionStatus(input: {
     );
 
     if (status.status === "ready" && status.credentials) {
-      return { ok: true, credentials: status.credentials, jobId: input.jobId };
+      return {
+        ok: true,
+        credentials: {
+          ...status.credentials,
+          mode: status.credentials.mode ?? ProvisionedRunnerModeType.Voice,
+        },
+        jobId: input.jobId,
+      };
     }
 
     if (status.status === "failed") {
@@ -187,6 +238,7 @@ export async function startSession(
     project_id: options.projectId,
     build_id: options.buildId,
     async: options.async ?? true,
+    wait_for_capacity: options.waitForCapacity ?? true,
   };
 
   options.debug?.info("provision", "post_sessions", JSON.stringify(body));
@@ -206,6 +258,7 @@ export async function startSession(
       ok: true,
       credentials: {
         session_id: sync.session_id,
+        mode: sync.mode ?? ProvisionedRunnerModeType.Voice,
         join_token: sync.join_token,
         signaling_url: sync.signaling_url,
         room_id: sync.room_id,
@@ -213,6 +266,20 @@ export async function startSession(
         expires_at: sync.expires_at,
       },
       jobId: sync.session_id,
+    };
+  }
+
+  if (res.status === 429) {
+    const text = await res.text().catch(() => "");
+    const message = `POST /sessions capacity exceeded (${res.status}): ${text}`;
+    emitProvisionError(options, {
+      code: "CAPACITY_EXCEEDED",
+      message,
+    });
+    return {
+      ok: false,
+      code: "CAPACITY_EXCEEDED",
+      message,
     };
   }
 
@@ -235,6 +302,7 @@ export async function startSession(
     pollIntervalMs: options.pollIntervalMs ?? 1000,
     pollTimeoutMs: options.pollTimeoutMs ?? 120_000,
     onStatus: options.onStatus,
+    onQueuePosition: options.onQueuePosition,
     onSessionError: options.onSessionError,
     debug: options.debug,
   });
