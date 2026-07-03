@@ -14,16 +14,13 @@ export type SessionFailureCode =
   | "RUNNER_UNAVAILABLE"
   | "CAPACITY_EXCEEDED"
   | "CAPACITY_WAIT_EXPIRED"
+  | "MONTHLY_USAGE_EXCEEDED"
   | "ORCHESTRATOR_ERROR"
   | "JOIN_TOKEN_ERROR"
   | "TIMEOUT";
 
 export type SessionJobStatus =
-  | "queued"
-  | "waiting"
-  | "provisioning"
-  | "ready"
-  | "failed";
+  "queued" | "waiting" | "provisioning" | "ready" | "failed";
 
 export type SessionCredentials = {
   session_id: string;
