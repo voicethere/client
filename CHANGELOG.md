@@ -2,14 +2,22 @@
 
 ## [Unreleased]
 
+## 0.7.1 — 2026-07-07
+
 ### Added
 
 - **WebRTC connection status tracking** — `onConnectionStatus` on `connectBrowserSession` / `connectBrowserVoiceSession` reports phases from signaling through media or data-channel readiness; `getConnectionStatus()` snapshots the current state.
 - **Readiness-aware `waitForConnected()`** — voice sessions resolve when the peer connection is connected and inbound/outbound audio tracks are live; data sessions resolve when `voice-control` and `voicethere-sync` are open; `voice+data` requires both.
+- **`MONTHLY_USAGE_EXCEEDED` failure code** — provisioning failures now surface monthly usage limit errors from the session API.
 
 ### Changed
 
 - **Embed widget and React starter** — show WebRTC connection progress after provisioning (not only orchestrator job status).
+- **Embed widget provisioning UI** — stable connecting label and spinner while queued/provisioning instead of rapidly updating status text.
+
+### Fixed
+
+- **Initial signaling join** — first connect uses a dedicated join path instead of the same-session reconnect flow, avoiding spurious peer-connection resets and reconnect debug noise.
 
 ## 0.7.0 — 2026-07-03
 
