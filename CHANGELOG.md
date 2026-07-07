@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Browser answer ICE gathering** — wait for local ICE gathering to complete before sending the SDP answer (matches agent offer and `@node-webrtc-rust/signaling` auto-negotiate), reducing first-connect `WEBRTC_CONNECTION_FAILED` when TURN relay candidates are required.
+
 ## 0.7.1 — 2026-07-07
 
 ### Added
