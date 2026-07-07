@@ -11,6 +11,7 @@ import {
   ProvisionedRunnerModeType,
   type BrowserSessionMode,
 } from "./session-modes.js";
+import type { WebRtcConnectionStatus, WebRtcReadinessProfile } from "./webrtc-connection-status.js";
 
 export type ConnectBrowserSessionOptions = {
   mode?: BrowserSessionMode;
@@ -27,6 +28,7 @@ export type ConnectBrowserSessionOptions = {
   reconnectPolicy?: import("./browser-voice-session.js").ReconnectPolicy;
   maxAutoReconnectAttempts?: number;
   onReconnecting?: (attempt: number) => void;
+  onConnectionStatus?: (status: WebRtcConnectionStatus) => void;
 };
 
 export type BrowserSession = BrowserVoiceSession & {
@@ -56,10 +58,17 @@ export async function connectBrowserSession(
   const requestMic =
     resolvedMode === BrowserSessionModeType.Voice ||
     resolvedMode === BrowserSessionModeType.VoiceAndData;
+  const readiness: WebRtcReadinessProfile =
+    resolvedMode === BrowserSessionModeType.VoiceAndData
+      ? "voice_and_data"
+      : resolvedMode === BrowserSessionModeType.Voice
+        ? "voice"
+        : "data";
   const session = await connectBrowserVoiceSession({
     credentials: options.credentials,
     peerId: options.peerId,
     requestMic,
+    readiness,
     audioElement: options.audioElement,
     onDebugEvent: options.onDebugEvent,
     customerContext: options.customerContext,
@@ -71,6 +80,7 @@ export async function connectBrowserSession(
     reconnectPolicy: options.reconnectPolicy,
     maxAutoReconnectAttempts: options.maxAutoReconnectAttempts,
     onReconnecting: options.onReconnecting,
+    onConnectionStatus: options.onConnectionStatus,
   });
 
   return { ...session, mode: resolvedMode };
@@ -131,6 +141,18 @@ export {
   type BrowserSessionMode,
   type ProvisionedRunnerMode,
 } from "./session-modes.js";
+export type {
+  WebRtcConnectionPhase,
+  WebRtcConnectionSnapshot,
+  WebRtcConnectionStatus,
+  WebRtcReadinessProfile,
+} from "./webrtc-connection-status.js";
+export {
+  buildWebRtcConnectionStatus,
+  deriveWebRtcConnectionPhase,
+  isWebRtcConnectionReady,
+  resolveReadinessProfile,
+} from "./webrtc-connection-status.js";
 
 export type { DebugConsole, DebugEvent } from "./debug-console.js";
 export type { WebRtcRuntime } from "./webrtc-runtime.js";

@@ -1,11 +1,10 @@
 import {
   BrowserSessionModeType,
+  connectBrowserSession,
   createDebugConsole,
   startSession,
-} from "../browser/browser-session.js";
-import {
-  connectBrowserSession,
   type BrowserSessionMode,
+  type WebRtcConnectionStatus,
 } from "../browser/browser-session.js";
 
 export type VoiceThereWidgetTheme = {
@@ -28,6 +27,28 @@ export type VoiceThereWidget = {
   close: () => void;
   destroy: () => void;
 };
+
+function formatWebRtcStatus(status: WebRtcConnectionStatus): string {
+  if (status.ready) return "Connected";
+  switch (status.phase) {
+    case "signaling":
+      return "Joining signaling…";
+    case "negotiating":
+      return "Negotiating WebRTC…";
+    case "connecting":
+      return "Connecting WebRTC…";
+    case "awaiting_media":
+      return "Waiting for audio tracks…";
+    case "awaiting_channels":
+      return "Opening data channels…";
+    case "failed":
+      return "WebRTC connection failed";
+    case "closed":
+      return "Disconnected";
+    default:
+      return "Connecting…";
+  }
+}
 
 export function createVoiceThereWidget(
   options: VoiceThereWidgetOptions,
@@ -143,13 +164,16 @@ export function createVoiceThereWidget(
         mode,
         credentials: started.credentials,
         onDebugEvent: debug,
+        onConnectionStatus: (connectionStatus) => {
+          status.textContent = formatWebRtcStatus(connectionStatus);
+        },
         onReconnecting: (attempt) => {
           status.textContent = `Reconnecting (${attempt})…`;
         },
       });
 
       await session.waitForConnected();
-      status.textContent = "Connected";
+      status.textContent = formatWebRtcStatus(session.getConnectionStatus());
       connectBtn.textContent = "Disconnect";
       connectBtn.title =
         "Disconnect this session. Connect again to start a new orchestrator session.";

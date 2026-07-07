@@ -24,6 +24,16 @@ describe("connectBrowserSession", () => {
       getMicStream: () => null,
       waitForConnected: vi.fn(async () => undefined),
       getConnectionState: () => "new" as const,
+      getConnectionStatus: () => ({
+        signalingJoined: false,
+        peerConnectionState: "new" as const,
+        inboundAudioTrack: false,
+        outboundAudioTrack: false,
+        controlChannelOpen: false,
+        syncChannelOpen: false,
+        phase: "signaling" as const,
+        ready: false,
+      }),
       reconnect: vi.fn(async () => undefined),
     };
     connectBrowserVoiceSession.mockResolvedValue(baseSession);
@@ -53,6 +63,7 @@ describe("connectBrowserSession", () => {
     expect(connectBrowserVoiceSession).toHaveBeenCalledWith(
       expect.objectContaining({
         requestMic: true,
+        readiness: "voice",
         onControlMessage,
         onBinaryMessage,
         onSyncBinaryMessage,
@@ -75,6 +86,16 @@ describe("connectBrowserSession", () => {
       getMicStream: () => null,
       waitForConnected: vi.fn(async () => undefined),
       getConnectionState: () => "new" as const,
+      getConnectionStatus: () => ({
+        signalingJoined: false,
+        peerConnectionState: "new" as const,
+        inboundAudioTrack: false,
+        outboundAudioTrack: false,
+        controlChannelOpen: false,
+        syncChannelOpen: false,
+        phase: "signaling" as const,
+        ready: false,
+      }),
       reconnect: vi.fn(async () => undefined),
     };
     connectBrowserVoiceSession.mockResolvedValue(baseSession);
@@ -92,7 +113,7 @@ describe("connectBrowserSession", () => {
     });
 
     expect(connectBrowserVoiceSession).toHaveBeenCalledWith(
-      expect.objectContaining({ requestMic: false }),
+      expect.objectContaining({ requestMic: false, readiness: "data" }),
     );
     expect(session.mode).toBe("chat");
   });

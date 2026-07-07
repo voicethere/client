@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- **WebRTC connection status tracking** — `onConnectionStatus` on `connectBrowserSession` / `connectBrowserVoiceSession` reports phases from signaling through media or data-channel readiness; `getConnectionStatus()` snapshots the current state.
+- **Readiness-aware `waitForConnected()`** — voice sessions resolve when the peer connection is connected and inbound/outbound audio tracks are live; data sessions resolve when `voice-control` and `voicethere-sync` are open; `voice+data` requires both.
+
+### Changed
+
+- **Embed widget and React starter** — show WebRTC connection progress after provisioning (not only orchestrator job status).
+
 ## 0.7.0 — 2026-07-03
 
 ### Added

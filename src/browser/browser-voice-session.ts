@@ -11,6 +11,14 @@ import {
 import type { SessionCredentials } from "./session-provision.js";
 import type { DebugConsole } from "./debug-console.js";
 import {
+  buildWebRtcConnectionStatus,
+  isWebRtcConnectionReady,
+  resolveReadinessProfile,
+  type WebRtcConnectionSnapshot,
+  type WebRtcConnectionStatus,
+  type WebRtcReadinessProfile,
+} from "./webrtc-connection-status.js";
+import {
   getDefaultBrowserRuntime,
   type WebRtcRuntime,
 } from "./webrtc-runtime.js";
@@ -87,6 +95,14 @@ export type BrowserVoiceSessionOptions = {
   /** Max automatic same-session retries after unintentional disconnect (default 4). */
   maxAutoReconnectAttempts?: number;
   onReconnecting?: (attempt: number) => void;
+  /**
+   * Readiness gate for `waitForConnected()` / `getConnectionStatus().ready`.
+   * Defaults from `requestMic`: voice sessions wait for inbound+outbound audio tracks;
+   * data sessions wait for voice-control and voicethere-sync channels to open.
+   */
+  readiness?: WebRtcReadinessProfile;
+  /** Fired whenever WebRTC connection readiness changes (signaling through media/DCs). */
+  onConnectionStatus?: (status: WebRtcConnectionStatus) => void;
 };
 
 export type BrowserVoiceSession = {
@@ -103,9 +119,13 @@ export type BrowserVoiceSession = {
   /** Binary on voicethere-sync data channel (throws if channel not open). */
   sendSyncBinary: (data: ArrayBuffer | Uint8Array) => void;
   getMicStream: () => MediaStream | null;
-  /** Resolves when peer connection reaches `connected` (or rejects on timeout/failure). */
+  /**
+   * Resolves when the session meets the readiness profile (voice: PC + inbound/outbound
+   * audio tracks; data: PC + both data channels open) or rejects on timeout/failure.
+   */
   waitForConnected: (timeoutMs?: number) => Promise<void>;
   getConnectionState: () => RTCPeerConnectionState | "new";
+  getConnectionStatus: () => WebRtcConnectionStatus;
   /** Re-open signaling with the same credentials and peer id (same orchestrator session). */
   reconnect: () => Promise<void>;
 };
@@ -214,6 +234,50 @@ export async function connectBrowserVoiceSession(
   const maxAutoReconnectAttempts = options.maxAutoReconnectAttempts ?? 4;
   let autoReconnectAttempts = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  const readinessProfile = resolveReadinessProfile({
+    requestMic: options.requestMic,
+    readiness: options.readiness,
+  });
+
+  const connectionSnapshot: WebRtcConnectionSnapshot = {
+    signalingJoined: false,
+    peerConnectionState: "new",
+    inboundAudioTrack: false,
+    outboundAudioTrack: false,
+    controlChannelOpen: false,
+    syncChannelOpen: false,
+  };
+
+  const publishConnectionStatus = (): void => {
+    options.onConnectionStatus?.(
+      buildWebRtcConnectionStatus(connectionSnapshot, readinessProfile),
+    );
+  };
+
+  const syncOutboundAudioTrack = (): void => {
+    if (!micStream) {
+      updateConnectionSnapshot({ outboundAudioTrack: false });
+      return;
+    }
+    updateConnectionSnapshot({
+      outboundAudioTrack: micStream
+        .getAudioTracks()
+        .some((track) => track.readyState === "live"),
+    });
+  };
+
+  const tryResolveConnected = (): void => {
+    if (!isWebRtcConnectionReady(connectionSnapshot, readinessProfile)) return;
+    resolveConnected?.();
+  };
+
+  const updateConnectionSnapshot = (
+    patch: Partial<WebRtcConnectionSnapshot>,
+  ): void => {
+    Object.assign(connectionSnapshot, patch);
+    publishConnectionStatus();
+    tryResolveConnected();
+  };
 
   const notifySessionError = (event: SessionErrorEvent) => {
     emitSessionError(options.onSessionError, event);
@@ -321,6 +385,7 @@ export async function connectBrowserVoiceSession(
       audio: true,
       video: false,
     });
+    syncOutboundAudioTrack();
     debug?.info("voice", "mic_granted");
   }
 
@@ -336,36 +401,76 @@ export async function connectBrowserVoiceSession(
     connectedPromise = null;
     resolveConnected = null;
     rejectConnected = null;
+    updateConnectionSnapshot({
+      peerConnectionState: "new",
+      inboundAudioTrack: false,
+      outboundAudioTrack: false,
+      controlChannelOpen: false,
+      syncChannelOpen: false,
+    });
+  };
+
+  const bindDataChannel = (
+    channel: RTCDataChannel,
+    binding: {
+      kind: DataChannelKind;
+      label: string;
+      openField: "controlChannelOpen" | "syncChannelOpen";
+      assign: (next: RTCDataChannel | null) => void;
+      onOpen?: (channel: RTCDataChannel) => void;
+    },
+  ): void => {
+    binding.assign(channel);
+
+    const markOpen = () => {
+      updateConnectionSnapshot({ [binding.openField]: true });
+    };
+
+    channel.onopen = () => {
+      debug?.info("dc", "open", binding.label);
+      markOpen();
+      binding.onOpen?.(channel);
+    };
+    if (channel.readyState === "open") markOpen();
+
+    channel.onclose = () => {
+      debug?.info("dc", "close", binding.label);
+      binding.assign(null);
+      updateConnectionSnapshot({ [binding.openField]: false });
+    };
+
+    wireBinaryChannel(channel, binding.kind);
   };
 
   const wireControl = (channel: RTCDataChannel) => {
-    controlChannel = channel;
-    channel.onopen = () => {
-      debug?.info("dc", "open", VOICE_CONTROL_CHANNEL_LABEL);
-      if (options.customerContext) {
-        channel.send(
+    bindDataChannel(channel, {
+      kind: "control",
+      label: VOICE_CONTROL_CHANNEL_LABEL,
+      openField: "controlChannelOpen",
+      assign: (next) => {
+        controlChannel = next;
+      },
+      onOpen: (openChannel) => {
+        if (!options.customerContext) return;
+        openChannel.send(
           JSON.stringify({
             type: "session_hello",
             customer_context: options.customerContext,
           }),
         );
-      }
-    };
-    channel.onclose = () => {
-      debug?.info("dc", "close", VOICE_CONTROL_CHANNEL_LABEL);
-      controlChannel = null;
-    };
-    wireBinaryChannel(channel, "control");
+      },
+    });
   };
 
   const wireSync = (channel: RTCDataChannel) => {
-    syncChannel = channel;
-    channel.onopen = () => debug?.info("dc", "open", VOICE_SYNC_CHANNEL_LABEL);
-    channel.onclose = () => {
-      debug?.info("dc", "close", VOICE_SYNC_CHANNEL_LABEL);
-      syncChannel = null;
-    };
-    wireBinaryChannel(channel, "sync");
+    bindDataChannel(channel, {
+      kind: "sync",
+      label: VOICE_SYNC_CHANNEL_LABEL,
+      openField: "syncChannelOpen",
+      assign: (next) => {
+        syncChannel = next;
+      },
+    });
   };
 
   const onServerOffer = async (sdp: RTCSessionDescriptionInit) => {
@@ -379,6 +484,13 @@ export async function connectBrowserVoiceSession(
       connectedPromise = null;
       resolveConnected = null;
       rejectConnected = null;
+      updateConnectionSnapshot({
+        peerConnectionState: "new",
+        inboundAudioTrack: false,
+        outboundAudioTrack: false,
+        controlChannelOpen: false,
+        syncChannelOpen: false,
+      });
     }
 
     ensureConnectedPromise();
@@ -392,6 +504,7 @@ export async function connectBrowserVoiceSession(
         void options.audioElement.play().catch(() => undefined);
       }
       options.onAgentAudioTrack?.(event.track);
+      updateConnectionSnapshot({ inboundAudioTrack: true });
       debug?.info("webrtc", "agent_audio_track");
     };
 
@@ -416,6 +529,7 @@ export async function connectBrowserVoiceSession(
     pc.onconnectionstatechange = () => {
       connectionState = pc?.connectionState ?? "new";
       debug?.info("webrtc", "connection_state", connectionState);
+      updateConnectionSnapshot({ peerConnectionState: connectionState });
       if (connectionState === "connected") {
         autoReconnectAttempts = 0;
         stopMicPump?.();
@@ -427,7 +541,7 @@ export async function connectBrowserVoiceSession(
             debug,
           );
         }
-        resolveConnected?.();
+        syncOutboundAudioTrack();
       } else if (connectionState === "failed") {
         stopMicPump?.();
         stopMicPump = null;
@@ -483,6 +597,7 @@ export async function connectBrowserVoiceSession(
 
     if (micStream) {
       await attachMicTracks(pc, micStream);
+      syncOutboundAudioTrack();
       if ((options.micPump ?? "silent") === "external") {
         for (const track of micStream.getAudioTracks()) {
           if (isWriteSampleTrack(track)) {
@@ -583,6 +698,7 @@ export async function connectBrowserVoiceSession(
         sendSignal({ type: "join", room: roomId, peerId });
         debug?.info("signaling", "join_sent", `room=${roomId} peer=${peerId}`);
         debug?.info("signaling", isReconnect ? "rejoined" : "joined", roomId);
+        updateConnectionSnapshot({ signalingJoined: true });
         resolve();
       };
       ws.onerror = () => {
@@ -614,6 +730,7 @@ export async function connectBrowserVoiceSession(
   };
 
   await joinSignalingRoom(false);
+  publishConnectionStatus();
 
   const requireOpenControl = (): RTCDataChannel => {
     if (!controlChannel || controlChannel.readyState !== "open") {
@@ -632,7 +749,7 @@ export async function connectBrowserVoiceSession(
   };
 
   const waitForConnected = async (timeoutMs = 60_000): Promise<void> => {
-    if (connectionState === "connected") return;
+    if (isWebRtcConnectionReady(connectionSnapshot, readinessProfile)) return;
     ensureConnectedPromise();
     try {
       await Promise.race([
@@ -663,6 +780,8 @@ export async function connectBrowserVoiceSession(
     peerId,
     getMicStream: () => micStream,
     getConnectionState: () => connectionState,
+    getConnectionStatus: () =>
+      buildWebRtcConnectionStatus(connectionSnapshot, readinessProfile),
     waitForConnected,
     reconnect: async () => {
       autoReconnectAttempts = 0;
@@ -711,6 +830,14 @@ export async function connectBrowserVoiceSession(
       pc?.close();
       micStream?.getTracks().forEach((track) => track.stop());
       ws?.close();
+      updateConnectionSnapshot({
+        signalingJoined: false,
+        peerConnectionState: "closed",
+        inboundAudioTrack: false,
+        outboundAudioTrack: false,
+        controlChannelOpen: false,
+        syncChannelOpen: false,
+      });
       debug?.info("session", "disconnected");
     },
   };
