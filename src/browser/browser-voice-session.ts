@@ -410,48 +410,67 @@ export async function connectBrowserVoiceSession(
     });
   };
 
-  const wireControl = (channel: RTCDataChannel) => {
-    controlChannel = channel;
+  const bindDataChannel = (
+    channel: RTCDataChannel,
+    binding: {
+      kind: DataChannelKind;
+      label: string;
+      openField: "controlChannelOpen" | "syncChannelOpen";
+      assign: (next: RTCDataChannel | null) => void;
+      onOpen?: (channel: RTCDataChannel) => void;
+    },
+  ): void => {
+    binding.assign(channel);
+
     const markOpen = () => {
-      updateConnectionSnapshot({ controlChannelOpen: true });
+      updateConnectionSnapshot({ [binding.openField]: true });
     };
+
     channel.onopen = () => {
-      debug?.info("dc", "open", VOICE_CONTROL_CHANNEL_LABEL);
+      debug?.info("dc", "open", binding.label);
       markOpen();
-      if (options.customerContext) {
-        channel.send(
+      binding.onOpen?.(channel);
+    };
+    if (channel.readyState === "open") markOpen();
+
+    channel.onclose = () => {
+      debug?.info("dc", "close", binding.label);
+      binding.assign(null);
+      updateConnectionSnapshot({ [binding.openField]: false });
+    };
+
+    wireBinaryChannel(channel, binding.kind);
+  };
+
+  const wireControl = (channel: RTCDataChannel) => {
+    bindDataChannel(channel, {
+      kind: "control",
+      label: VOICE_CONTROL_CHANNEL_LABEL,
+      openField: "controlChannelOpen",
+      assign: (next) => {
+        controlChannel = next;
+      },
+      onOpen: (openChannel) => {
+        if (!options.customerContext) return;
+        openChannel.send(
           JSON.stringify({
             type: "session_hello",
             customer_context: options.customerContext,
           }),
         );
-      }
-    };
-    if (channel.readyState === "open") markOpen();
-    channel.onclose = () => {
-      debug?.info("dc", "close", VOICE_CONTROL_CHANNEL_LABEL);
-      controlChannel = null;
-      updateConnectionSnapshot({ controlChannelOpen: false });
-    };
-    wireBinaryChannel(channel, "control");
+      },
+    });
   };
 
   const wireSync = (channel: RTCDataChannel) => {
-    syncChannel = channel;
-    const markOpen = () => {
-      updateConnectionSnapshot({ syncChannelOpen: true });
-    };
-    channel.onopen = () => {
-      debug?.info("dc", "open", VOICE_SYNC_CHANNEL_LABEL);
-      markOpen();
-    };
-    if (channel.readyState === "open") markOpen();
-    channel.onclose = () => {
-      debug?.info("dc", "close", VOICE_SYNC_CHANNEL_LABEL);
-      syncChannel = null;
-      updateConnectionSnapshot({ syncChannelOpen: false });
-    };
-    wireBinaryChannel(channel, "sync");
+    bindDataChannel(channel, {
+      kind: "sync",
+      label: VOICE_SYNC_CHANNEL_LABEL,
+      openField: "syncChannelOpen",
+      assign: (next) => {
+        syncChannel = next;
+      },
+    });
   };
 
   const onServerOffer = async (sdp: RTCSessionDescriptionInit) => {
