@@ -38,7 +38,13 @@ export function useVoiceThereSession(
       mode,
       credentials: provision.credentials,
       onDebugEvent: debug,
+      onConnectionStatus: (connectionStatus) => {
+        setStatus(
+          connectionStatus.ready ? "connected" : `webrtc:${connectionStatus.phase}`,
+        );
+      },
     });
+    await sessionRef.current.waitForConnected();
     setStatus("connected");
   }, [debug, mode, projectId]);
 
