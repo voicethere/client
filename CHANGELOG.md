@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.7.3 — 2026-07-07
+
+### Fixed
+
+- **`waitForIceGatheringComplete` on Node** — fall back to `onicegatheringstatechange` when `RTCPeerConnection.addEventListener` is unavailable (`@node-webrtc-rust/sdk`), fixing headless E2E load tests that use `@voicethere/client/node`.
+
 ## 0.7.2 — 2026-07-07
 
 ### Fixed

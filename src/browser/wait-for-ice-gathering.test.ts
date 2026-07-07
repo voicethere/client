@@ -36,6 +36,31 @@ describe("waitForIceGatheringComplete", () => {
     await expect(pending).resolves.toBeUndefined();
   });
 
+  it("uses onicegatheringstatechange when addEventListener is unavailable (Node SDK)", async () => {
+    let state: RTCIceGatheringState = "gathering";
+    const debugHandler = vi.fn();
+    let handler: ((event: Event) => void) | null = debugHandler;
+    const pc = {
+      get iceGatheringState() {
+        return state;
+      },
+      get onicegatheringstatechange() {
+        return handler;
+      },
+      set onicegatheringstatechange(next) {
+        handler = next;
+      },
+    } as unknown as RTCPeerConnection;
+
+    const pending = waitForIceGatheringComplete(pc, 5_000);
+    expect(handler).not.toBe(debugHandler);
+    state = "complete";
+    handler?.({} as Event);
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(debugHandler).toHaveBeenCalled();
+  });
+
   it("rejects when gathering does not complete before timeout", async () => {
     vi.useFakeTimers();
     try {
