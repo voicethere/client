@@ -87,7 +87,36 @@ export function createVoiceThereWidget(
   const status = document.createElement("div");
   status.style.fontSize = "12px";
   status.style.marginBottom = "8px";
+  status.style.display = "flex";
+  status.style.alignItems = "center";
+  status.style.gap = "8px";
   status.textContent = "Disconnected";
+
+  const statusSpinner = document.createElement("span");
+  statusSpinner.style.display = "none";
+  statusSpinner.style.width = "14px";
+  statusSpinner.style.height = "14px";
+  statusSpinner.style.border = "2px solid rgba(34, 211, 238, 0.3)";
+  statusSpinner.style.borderTopColor = "#22d3ee";
+  statusSpinner.style.borderRadius = "50%";
+  statusSpinner.style.animation = "voicethere-spin 0.8s linear infinite";
+  statusSpinner.setAttribute("aria-hidden", "true");
+
+  const statusText = document.createElement("span");
+  status.append(statusSpinner, statusText);
+
+  if (!document.getElementById("voicethere-widget-spin-style")) {
+    const style = document.createElement("style");
+    style.id = "voicethere-widget-spin-style";
+    style.textContent =
+      "@keyframes voicethere-spin { to { transform: rotate(360deg); } }";
+    document.head.append(style);
+  }
+
+  const setStatusDisplay = (text: string, loading = false) => {
+    statusText.textContent = text;
+    statusSpinner.style.display = loading ? "inline-block" : "none";
+  };
 
   const log = document.createElement("pre");
   log.style.flex = "1";
@@ -137,18 +166,24 @@ export function createVoiceThereWidget(
       if (session) {
         session.disconnect();
         session = null;
-        status.textContent = "Disconnected";
+        setStatusDisplay("Disconnected");
         connectBtn.textContent = "Connect";
         return;
       }
 
-      status.textContent = "Provisioning…";
+      setStatusDisplay("Connecting…", true);
       const started = await startSession({
         apiBase: options.apiBase,
         projectId: options.projectId,
         headers: { Authorization: `Bearer ${options.clientKey}` },
         onStatus: (s) => {
-          status.textContent = `Status: ${s.status}`;
+          if (s.status === "waiting") {
+            const position =
+              s.queue_position != null ? ` (position ${s.queue_position})` : "";
+            setStatusDisplay(`Waiting for capacity${position}…`, true);
+          } else if (s.status === "failed") {
+            setStatusDisplay(s.failure_message ?? "Provisioning failed");
+          }
         },
         debug,
       });
@@ -156,7 +191,7 @@ export function createVoiceThereWidget(
       renderLog();
 
       if (!started.ok) {
-        status.textContent = started.message;
+        setStatusDisplay(started.message);
         return;
       }
 
@@ -165,15 +200,15 @@ export function createVoiceThereWidget(
         credentials: started.credentials,
         onDebugEvent: debug,
         onConnectionStatus: (connectionStatus) => {
-          status.textContent = formatWebRtcStatus(connectionStatus);
+          setStatusDisplay(formatWebRtcStatus(connectionStatus));
         },
         onReconnecting: (attempt) => {
-          status.textContent = `Reconnecting (${attempt})…`;
+          setStatusDisplay(`Reconnecting (${attempt})…`, true);
         },
       });
 
       await session.waitForConnected();
-      status.textContent = formatWebRtcStatus(session.getConnectionStatus());
+      setStatusDisplay(formatWebRtcStatus(session.getConnectionStatus()));
       connectBtn.textContent = "Disconnect";
       connectBtn.title =
         "Disconnect this session. Connect again to start a new orchestrator session.";
