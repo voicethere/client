@@ -567,12 +567,14 @@ export async function connectBrowserVoiceSession(
     };
   };
 
-  const reconnectSignaling = async (): Promise<void> => {
-    resetPeerConnection();
-    if (ws) {
-      ws.onclose = null;
-      ws.close();
-      ws = null;
+  const joinSignalingRoom = async (isReconnect: boolean): Promise<void> => {
+    if (isReconnect) {
+      resetPeerConnection();
+      if (ws) {
+        ws.onclose = null;
+        ws.close();
+        ws = null;
+      }
     }
     ws = new runtime.WebSocket(signalingUrl);
     await new Promise<void>((resolve, reject) => {
@@ -580,7 +582,7 @@ export async function connectBrowserVoiceSession(
       ws.onopen = () => {
         sendSignal({ type: "join", room: roomId, peerId });
         debug?.info("signaling", "join_sent", `room=${roomId} peer=${peerId}`);
-        debug?.info("signaling", "rejoined", roomId);
+        debug?.info("signaling", isReconnect ? "rejoined" : "joined", roomId);
         resolve();
       };
       ws.onerror = () => {
@@ -602,10 +604,16 @@ export async function connectBrowserVoiceSession(
       if (gracefulDisconnect || reconnectPolicy === "new-session") return;
       scheduleAutoReconnect("signaling_closed");
     };
-    debug?.info("session", "same_session_reconnect", orchestratorSessionId);
+    if (isReconnect) {
+      debug?.info("session", "same_session_reconnect", orchestratorSessionId);
+    }
   };
 
-  await reconnectSignaling();
+  const reconnectSignaling = async (): Promise<void> => {
+    await joinSignalingRoom(true);
+  };
+
+  await joinSignalingRoom(false);
 
   const requireOpenControl = (): RTCDataChannel => {
     if (!controlChannel || controlChannel.readyState !== "open") {
