@@ -22,6 +22,7 @@ import {
   getDefaultBrowserRuntime,
   type WebRtcRuntime,
 } from "./webrtc-runtime.js";
+import { waitForIceGatheringComplete } from "./wait-for-ice-gathering.js";
 
 function redactSignalingUrlForLog(url: string): string {
   try {
@@ -617,6 +618,7 @@ export async function connectBrowserVoiceSession(
 
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
+    await waitForIceGatheringComplete(pc);
     sendToServer({
       type: "answer",
       targetPeerId: VOICE_AGENT_SERVER_PEER_ID,

@@ -90,6 +90,8 @@ class MockPeerConnection {
 
   async setLocalDescription(description: RTCSessionDescriptionInit): Promise<void> {
     this.localDescription = description;
+    this.iceGatheringState = "complete";
+    this.onicegatheringstatechange?.();
   }
 
   connect(): void {
