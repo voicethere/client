@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.7.4 — 2026-07-10
+
+### Added
+
+- **`getWebRtcDiagnostics()`** on `BrowserVoiceSession` — ICE transport state plus `getStats()` candidate-pair / relay summary for connect failure triage in staging E2E.
+
 ## 0.7.3 — 2026-07-07
 
 ### Fixed

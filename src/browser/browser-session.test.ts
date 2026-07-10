@@ -34,6 +34,7 @@ describe("connectBrowserSession", () => {
         phase: "signaling" as const,
         ready: false,
       }),
+      getWebRtcDiagnostics: vi.fn(async () => null),
       reconnect: vi.fn(async () => undefined),
     };
     connectBrowserVoiceSession.mockResolvedValue(baseSession);
@@ -96,6 +97,7 @@ describe("connectBrowserSession", () => {
         phase: "signaling" as const,
         ready: false,
       }),
+      getWebRtcDiagnostics: vi.fn(async () => null),
       reconnect: vi.fn(async () => undefined),
     };
     connectBrowserVoiceSession.mockResolvedValue(baseSession);

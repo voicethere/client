@@ -1,4 +1,7 @@
-import { createConnectionError, dispatchConnectionError } from "../connection-errors.js";
+import {
+  createConnectionError,
+  dispatchConnectionError,
+} from "../connection-errors.js";
 
 import { appendJoinToken } from "../resolve-connection.js";
 import {
@@ -18,6 +21,10 @@ import {
   type WebRtcConnectionStatus,
   type WebRtcReadinessProfile,
 } from "./webrtc-connection-status.js";
+import {
+  collectWebRtcDiagnostics,
+  type WebRtcDiagnostics,
+} from "./webrtc-diagnostics.js";
 import {
   getDefaultBrowserRuntime,
   type WebRtcRuntime,
@@ -127,6 +134,8 @@ export type BrowserVoiceSession = {
   waitForConnected: (timeoutMs?: number) => Promise<void>;
   getConnectionState: () => RTCPeerConnectionState | "new";
   getConnectionStatus: () => WebRtcConnectionStatus;
+  /** ICE / candidate-pair snapshot for connect failure triage. */
+  getWebRtcDiagnostics: () => Promise<WebRtcDiagnostics | null>;
   /** Re-open signaling with the same credentials and peer id (same orchestrator session). */
   reconnect: () => Promise<void>;
 };
@@ -162,9 +171,7 @@ async function attachMicTracks(
 ): Promise<void> {
   for (const track of micStream.getAudioTracks()) {
     const result = pc.addTrack(track as MediaStreamTrack, micStream) as
-      | RTCRtpSender
-      | Promise<RTCRtpSender>
-      | void;
+      RTCRtpSender | Promise<RTCRtpSender> | void;
     if (
       result &&
       typeof (result as Promise<RTCRtpSender>).then === "function"
@@ -713,7 +720,11 @@ export async function connectBrowserVoiceSession(
           }),
           { fallbackLog: false },
         );
-        debug?.error("signaling", "ws_error", redactSignalingUrlForLog(signalingUrl));
+        debug?.error(
+          "signaling",
+          "ws_error",
+          redactSignalingUrlForLog(signalingUrl),
+        );
         reject(new Error("WebSocket error"));
       };
     });
@@ -784,6 +795,11 @@ export async function connectBrowserVoiceSession(
     getConnectionState: () => connectionState,
     getConnectionStatus: () =>
       buildWebRtcConnectionStatus(connectionSnapshot, readinessProfile),
+    getWebRtcDiagnostics: async () =>
+      collectWebRtcDiagnostics(
+        pc,
+        buildWebRtcConnectionStatus(connectionSnapshot, readinessProfile),
+      ),
     waitForConnected,
     reconnect: async () => {
       autoReconnectAttempts = 0;
