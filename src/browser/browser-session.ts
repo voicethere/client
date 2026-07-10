@@ -11,7 +11,10 @@ import {
   ProvisionedRunnerModeType,
   type BrowserSessionMode,
 } from "./session-modes.js";
-import type { WebRtcConnectionStatus, WebRtcReadinessProfile } from "./webrtc-connection-status.js";
+import type {
+  WebRtcConnectionStatus,
+  WebRtcReadinessProfile,
+} from "./webrtc-connection-status.js";
 
 export type ConnectBrowserSessionOptions = {
   mode?: BrowserSessionMode;
@@ -153,6 +156,13 @@ export {
   isWebRtcConnectionReady,
   resolveReadinessProfile,
 } from "./webrtc-connection-status.js";
+export {
+  collectWebRtcDiagnostics,
+  formatWebRtcDiagnosticsLines,
+  summarizeRtcStatsReport,
+  type WebRtcDiagnostics,
+  type WebRtcStatsSummary,
+} from "./webrtc-diagnostics.js";
 
 export type { DebugConsole, DebugEvent } from "./debug-console.js";
 export type { WebRtcRuntime } from "./webrtc-runtime.js";

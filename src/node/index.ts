@@ -25,6 +25,14 @@ export type {
   StartSessionResult,
   WebRtcConnectionStatus,
   WebRtcReadinessProfile,
+  WebRtcDiagnostics,
+  WebRtcStatsSummary,
+} from "../browser/browser-session.js";
+
+export {
+  collectWebRtcDiagnostics,
+  formatWebRtcDiagnosticsLines,
+  summarizeRtcStatsReport,
 } from "../browser/browser-session.js";
 
 export type { WebRtcRuntime } from "../browser/webrtc-runtime.js";
