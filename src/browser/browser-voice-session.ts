@@ -768,11 +768,17 @@ export async function connectBrowserVoiceSession(
       await Promise.race([
         connectedPromise,
         new Promise<void>((_, reject) => {
-          setTimeout(
-            () =>
-              reject(new Error(`WebRTC connect timeout after ${timeoutMs}ms`)),
-            timeoutMs,
-          );
+          setTimeout(() => {
+            const status = buildWebRtcConnectionStatus(
+              connectionSnapshot,
+              readinessProfile,
+            );
+            reject(
+              new Error(
+                `WebRTC connect timeout after ${timeoutMs}ms; phase=${status.phase}; pc=${status.peerConnectionState}; signalingJoined=${status.signalingJoined}; control=${status.controlChannelOpen}; sync=${status.syncChannelOpen}`,
+              ),
+            );
+          }, timeoutMs);
         }),
       ]);
     } catch (error) {

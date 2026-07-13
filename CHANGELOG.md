@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.7.5 — 2026-07-13
+
+### Changed
+
+- **`waitForConnected()` timeout** — error message includes connection phase, peer connection state, and data-channel flags for E2E/Loki triage without extra debug tooling.
+
 ## 0.7.4 — 2026-07-10
 
 ### Added
