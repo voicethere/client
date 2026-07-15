@@ -35,6 +35,22 @@ import {
   WebRtcConnectRetryError,
 } from "./webrtc-connect-retry.js";
 
+/** Game-sync DC traffic logged at debug level — E2E stderr needs `LOAD_TEST_CLIENT_DEBUG=1`. */
+const HIGH_FREQUENCY_DC_TYPES = new Set(["keepalive", "state", "tick"]);
+
+function logDcMessage(
+  debug: DebugConsole | undefined,
+  name: string,
+  detail?: string,
+): void {
+  if (!debug) return;
+  if (HIGH_FREQUENCY_DC_TYPES.has(name)) {
+    debug.debug("dc", name, detail);
+    return;
+  }
+  debug.info("dc", name, detail);
+}
+
 function redactSignalingUrlForLog(url: string): string {
   try {
     const parsed = new URL(url);
@@ -410,7 +426,7 @@ export async function connectBrowserVoiceSession(
         message.type !== "session_error" &&
         message.type !== "agent_error"
       ) {
-        debug?.info("dc", message.type ?? "json", message.text);
+        logDcMessage(debug, message.type ?? "json", message.text);
       }
     } catch {
       debug?.warn("dc", "malformed", raw);
@@ -900,7 +916,12 @@ export async function connectBrowserVoiceSession(
     },
     sendToAgent: (payload: Record<string, unknown>) => {
       requireOpenControl().send(JSON.stringify(payload));
-      debug?.info("dc", "json", String(payload.type ?? "payload"));
+      const payloadType = String(payload.type ?? "payload");
+      if (HIGH_FREQUENCY_DC_TYPES.has(payloadType)) {
+        debug?.debug("dc", "json", payloadType);
+      } else {
+        debug?.info("dc", "json", payloadType);
+      }
     },
     sendBinary: (data: ArrayBuffer | Uint8Array) => {
       requireOpenControl().send(toArrayBuffer(data));

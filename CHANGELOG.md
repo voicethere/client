@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.7.7 — 2026-07-15
+
+### Changed
+
+- **Data-channel debug noise** — `keepalive`, `state`, and `tick` payloads log at `debug` instead of `info` (inbound and `sendToAgent` outbound). Staging E2E omits them unless `LOAD_TEST_CLIENT_DEBUG=1`.
+
 ## 0.7.6 — 2026-07-15
 
 ### Added
