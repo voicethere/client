@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## 0.7.6 — 2026-07-15
+
+### Added
+
+- **Same-session ICE/WebRTC auto-reconnect** — transient `failed` or unexpected `closed` peer connections schedule an exponential-backoff reconnect (default up to 4 attempts) without re-provisioning.
+- **`WebRtcConnectRetryError`** — internal retriable signal so `waitForConnected()` keeps waiting across reconnect attempts until `timeoutMs` or `maxAutoReconnectAttempts` is exhausted.
+
+### Fixed
+
+- **`waitForConnected()` during reconnect** — preserve the connect wait promise across signaling rejoin and ignore intentional peer-connection teardown when applying a replacement server offer.
+
 ## 0.7.5 — 2026-07-13
 
 ### Changed

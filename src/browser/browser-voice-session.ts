@@ -30,6 +30,10 @@ import {
   type WebRtcRuntime,
 } from "./webrtc-runtime.js";
 import { waitForIceGatheringComplete } from "./wait-for-ice-gathering.js";
+import {
+  isWebRtcConnectRetryError,
+  WebRtcConnectRetryError,
+} from "./webrtc-connect-retry.js";
 
 function redactSignalingUrlForLog(url: string): string {
   try {
@@ -100,7 +104,11 @@ export type BrowserVoiceSessionOptions = {
    * again for a fresh orchestrator session id.
    */
   reconnectPolicy?: ReconnectPolicy;
-  /** Max automatic same-session retries after unintentional disconnect (default 4). */
+  /**
+   * Max automatic same-session retries after unintentional signaling/WebRTC loss
+   * (default 4). `waitForConnected()` keeps waiting through these ICE reconnect
+   * attempts until `timeoutMs` elapses. Set `0` to fail on the first transport error.
+   */
   maxAutoReconnectAttempts?: number;
   onReconnecting?: (attempt: number) => void;
   /**
@@ -130,6 +138,9 @@ export type BrowserVoiceSession = {
   /**
    * Resolves when the session meets the readiness profile (voice: PC + inbound/outbound
    * audio tracks; data: PC + both data channels open) or rejects on timeout/failure.
+   * With the default `reconnectPolicy: "same-session"`, transient ICE/WebRTC failures
+   * trigger an automatic same-session reconnect and this call keeps waiting until
+   * `timeoutMs` (across retries) unless `maxAutoReconnectAttempts` is exhausted.
    */
   waitForConnected: (timeoutMs?: number) => Promise<void>;
   getConnectionState: () => RTCPeerConnectionState | "new";
@@ -314,6 +325,57 @@ export async function connectBrowserVoiceSession(
     return connectedPromise;
   };
 
+  const clearConnectedWait = (): void => {
+    connectedPromise = null;
+    resolveConnected = null;
+    rejectConnected = null;
+  };
+
+  const canAutoReconnectTransport = (): boolean => {
+    if (gracefulDisconnect || reconnectPolicy === "new-session") return false;
+    return autoReconnectAttempts < maxAutoReconnectAttempts;
+  };
+
+  const rejectConnectedWait = (error: Error, retriable: boolean): void => {
+    rejectConnected?.(
+      retriable ? new WebRtcConnectRetryError(error.message) : error,
+    );
+    clearConnectedWait();
+  };
+
+  const handleTransportFailure = (
+    state: "failed" | "closed",
+    reconnectReason: "webrtc_failed" | "webrtc_closed",
+  ): void => {
+    stopMicPump?.();
+    stopMicPump = null;
+    if (state === "failed") {
+      notifySessionError({
+        type: "session_error",
+        code: "WEBRTC_CONNECTION_FAILED",
+        message: "WebRTC peer connection failed",
+        session_id: orchestratorSessionId,
+        recoverable: canAutoReconnectTransport(),
+        occurred_at: new Date().toISOString(),
+      });
+    } else if (!gracefulDisconnect) {
+      notifySessionError({
+        type: "session_error",
+        code: "WEBRTC_CONNECTION_CLOSED",
+        message: "WebRTC peer connection closed unexpectedly",
+        session_id: orchestratorSessionId,
+        recoverable: canAutoReconnectTransport(),
+        occurred_at: new Date().toISOString(),
+      });
+    }
+
+    const retriable = canAutoReconnectTransport();
+    rejectConnectedWait(new Error(`peer connection ${state}`), retriable);
+    if (retriable) {
+      scheduleAutoReconnect(reconnectReason);
+    }
+  };
+
   const sendSignal = (message: Record<string, unknown>) => {
     if (ws?.readyState === runtime.WebSocket.OPEN) {
       ws.send(JSON.stringify(message));
@@ -397,18 +459,28 @@ export async function connectBrowserVoiceSession(
     debug?.info("voice", "mic_granted");
   }
 
-  const resetPeerConnection = (): void => {
+  let ignorePeerConnectionClose = false;
+
+  const resetPeerConnection = (options?: {
+    preserveConnectedWait?: boolean;
+  }): void => {
     stopMicPump?.();
     stopMicPump = null;
     controlChannel = null;
     syncChannel = null;
-    pc?.close();
+    if (pc) {
+      ignorePeerConnectionClose = true;
+      pc.close();
+      ignorePeerConnectionClose = false;
+    }
     pc = null;
     pendingIce.length = 0;
     connectionState = "new";
-    connectedPromise = null;
-    resolveConnected = null;
-    rejectConnected = null;
+    if (!options?.preserveConnectedWait) {
+      connectedPromise = null;
+      resolveConnected = null;
+      rejectConnected = null;
+    }
     updateConnectionSnapshot({
       peerConnectionState: "new",
       inboundAudioTrack: false,
@@ -483,15 +555,14 @@ export async function connectBrowserVoiceSession(
 
   const onServerOffer = async (sdp: RTCSessionDescriptionInit) => {
     if (pc) {
+      ignorePeerConnectionClose = true;
       pc.close();
+      ignorePeerConnectionClose = false;
       pc = null;
       pendingIce.length = 0;
       controlChannel = null;
       syncChannel = null;
       connectionState = "new";
-      connectedPromise = null;
-      resolveConnected = null;
-      rejectConnected = null;
       updateConnectionSnapshot({
         peerConnectionState: "new",
         inboundAudioTrack: false,
@@ -551,39 +622,18 @@ export async function connectBrowserVoiceSession(
         }
         syncOutboundAudioTrack();
       } else if (connectionState === "failed") {
-        stopMicPump?.();
-        stopMicPump = null;
-        notifySessionError({
-          type: "session_error",
-          code: "WEBRTC_CONNECTION_FAILED",
-          message: "WebRTC peer connection failed",
-          session_id: orchestratorSessionId,
-          recoverable: true,
-          occurred_at: new Date().toISOString(),
-        });
-        rejectConnected?.(new Error(`peer connection ${connectionState}`));
-        connectedPromise = null;
-        resolveConnected = null;
-        rejectConnected = null;
-        scheduleAutoReconnect("webrtc_failed");
+        handleTransportFailure("failed", "webrtc_failed");
       } else if (connectionState === "closed") {
-        stopMicPump?.();
-        stopMicPump = null;
-        if (!gracefulDisconnect) {
-          notifySessionError({
-            type: "session_error",
-            code: "WEBRTC_CONNECTION_CLOSED",
-            message: "WebRTC peer connection closed unexpectedly",
-            session_id: orchestratorSessionId,
-            recoverable: true,
-            occurred_at: new Date().toISOString(),
-          });
-          scheduleAutoReconnect("webrtc_closed");
+        if (ignorePeerConnectionClose || gracefulDisconnect) {
+          if (gracefulDisconnect) {
+            rejectConnectedWait(
+              new Error(`peer connection ${connectionState}`),
+              false,
+            );
+          }
+          return;
         }
-        rejectConnected?.(new Error(`peer connection ${connectionState}`));
-        connectedPromise = null;
-        resolveConnected = null;
-        rejectConnected = null;
+        handleTransportFailure("closed", "webrtc_closed");
       }
     };
 
@@ -693,7 +743,7 @@ export async function connectBrowserVoiceSession(
 
   const joinSignalingRoom = async (isReconnect: boolean): Promise<void> => {
     if (isReconnect) {
-      resetPeerConnection();
+      resetPeerConnection({ preserveConnectedWait: true });
       if (ws) {
         ws.onclose = null;
         ws.close();
@@ -762,36 +812,65 @@ export async function connectBrowserVoiceSession(
   };
 
   const waitForConnected = async (timeoutMs = 60_000): Promise<void> => {
-    if (isWebRtcConnectionReady(connectionSnapshot, readinessProfile)) return;
-    ensureConnectedPromise();
-    try {
-      await Promise.race([
-        connectedPromise,
-        new Promise<void>((_, reject) => {
-          setTimeout(() => {
-            const status = buildWebRtcConnectionStatus(
-              connectionSnapshot,
-              readinessProfile,
-            );
-            reject(
-              new Error(
-                `WebRTC connect timeout after ${timeoutMs}ms; phase=${status.phase}; pc=${status.peerConnectionState}; signalingJoined=${status.signalingJoined}; control=${status.controlChannelOpen}; sync=${status.syncChannelOpen}`,
-              ),
-            );
-          }, timeoutMs);
-        }),
-      ]);
-    } catch (error) {
+    const deadlineMs = Date.now() + timeoutMs;
+
+    const throwConnectTimeout = (): never => {
+      const status = buildWebRtcConnectionStatus(
+        connectionSnapshot,
+        readinessProfile,
+      );
+      const elapsedMs = timeoutMs;
+      const error = new Error(
+        `WebRTC connect timeout after ${elapsedMs}ms; phase=${status.phase}; pc=${status.peerConnectionState}; signalingJoined=${status.signalingJoined}; control=${status.controlChannelOpen}; sync=${status.syncChannelOpen}`,
+      );
       notifySessionError({
         type: "session_error",
         code: "WEBRTC_CONNECT_TIMEOUT",
-        message:
-          error instanceof Error ? error.message : "WebRTC connect timeout",
+        message: error.message,
         session_id: orchestratorSessionId,
         recoverable: true,
         occurred_at: new Date().toISOString(),
       });
       throw error;
+    };
+
+    while (true) {
+      if (isWebRtcConnectionReady(connectionSnapshot, readinessProfile)) return;
+
+      const remainingMs = deadlineMs - Date.now();
+      if (remainingMs <= 0) {
+        throwConnectTimeout();
+      }
+
+      const waitPromise = ensureConnectedPromise();
+      try {
+        await Promise.race([
+          waitPromise,
+          new Promise<void>((_, reject) => {
+            setTimeout(() => {
+              reject(new Error("__wait_for_connected_timeout__"));
+            }, remainingMs);
+          }),
+        ]);
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "__wait_for_connected_timeout__"
+        ) {
+          throwConnectTimeout();
+        }
+        if (isWebRtcConnectRetryError(error)) {
+          debug?.info(
+            "session",
+            "wait_for_connected_retry",
+            `attempt=${autoReconnectAttempts}`,
+          );
+          continue;
+        }
+        throw error;
+      }
+
+      if (isWebRtcConnectionReady(connectionSnapshot, readinessProfile)) return;
     }
   };
 
