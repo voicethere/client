@@ -5,6 +5,7 @@ import {
 
 import { appendJoinToken } from "../resolve-connection.js";
 import {
+  createLocalSessionError,
   emitSessionError,
   isSessionErrorEvent,
   parseLegacyAgentError,
@@ -263,6 +264,7 @@ export async function connectBrowserVoiceSession(
   let resolveConnected: (() => void) | null = null;
   let rejectConnected: ((error: Error) => void) | null = null;
   let connectedPromise: Promise<void> | null = null;
+  let pendingConnectFailure: Error | null = null;
   let stopMicPump: (() => void) | null = null;
   let gracefulDisconnect = false;
   const reconnectPolicy = options.reconnectPolicy ?? "same-session";
@@ -303,6 +305,7 @@ export async function connectBrowserVoiceSession(
 
   const tryResolveConnected = (): void => {
     if (!isWebRtcConnectionReady(connectionSnapshot, readinessProfile)) return;
+    pendingConnectFailure = null;
     resolveConnected?.();
   };
 
@@ -345,6 +348,7 @@ export async function connectBrowserVoiceSession(
         resolveConnected = resolve;
         rejectConnected = reject;
       });
+      void connectedPromise.catch(() => undefined);
     }
     return connectedPromise;
   };
@@ -361,9 +365,13 @@ export async function connectBrowserVoiceSession(
   };
 
   const rejectConnectedWait = (error: Error, retriable: boolean): void => {
-    rejectConnected?.(
-      retriable ? new WebRtcConnectRetryError(error.message) : error,
-    );
+    const wrapped = retriable
+      ? new WebRtcConnectRetryError(error.message)
+      : error;
+    if (!retriable) {
+      pendingConnectFailure = wrapped;
+    }
+    rejectConnected?.(wrapped);
     clearConnectedWait();
   };
 
@@ -506,6 +514,7 @@ export async function connectBrowserVoiceSession(
       connectedPromise = null;
       resolveConnected = null;
       rejectConnected = null;
+      pendingConnectFailure = null;
     }
     updateConnectionSnapshot({
       peerConnectionState: "new",
@@ -580,134 +589,184 @@ export async function connectBrowserVoiceSession(
   };
 
   const onServerOffer = async (sdp: RTCSessionDescriptionInit) => {
-    if (pc) {
-      ignorePeerConnectionClose = true;
-      pc.close();
-      ignorePeerConnectionClose = false;
-      pc = null;
-      pendingIce.length = 0;
-      controlChannel = null;
-      syncChannel = null;
-      connectionState = "new";
-      updateConnectionSnapshot({
-        peerConnectionState: "new",
-        inboundAudioTrack: false,
-        outboundAudioTrack: false,
-        controlChannelOpen: false,
-        syncChannelOpen: false,
-      });
-    }
-
-    ensureConnectedPromise();
-    pc = new runtime.RTCPeerConnection({ iceServers });
-
-    pc.ontrack = (event) => {
-      if (event.track.kind !== "audio") return;
-      const stream = event.streams[0] ?? new MediaStream([event.track]);
-      if (options.audioElement) {
-        options.audioElement.srcObject = stream;
-        void options.audioElement.play().catch(() => undefined);
-      }
-      options.onAgentAudioTrack?.(event.track);
-      updateConnectionSnapshot({ inboundAudioTrack: true });
-      debug?.info("webrtc", "agent_audio_track");
+    let step = "reset_peer_connection";
+    const startedAtMs = Date.now();
+    const logOfferStep = (name: string): void => {
+      debug?.info(
+        "signaling",
+        "offer_step",
+        `${name} elapsed_ms=${Date.now() - startedAtMs}`,
+      );
     };
 
-    pc.ondatachannel = (event) => {
-      if (event.channel.label === VOICE_CONTROL_CHANNEL_LABEL) {
-        wireControl(event.channel);
-      } else if (event.channel.label === VOICE_SYNC_CHANNEL_LABEL) {
-        wireSync(event.channel);
-      }
-    };
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        sendToServer({
-          type: "ice-candidate",
-          targetPeerId: VOICE_AGENT_SERVER_PEER_ID,
-          candidate: event.candidate.toJSON(),
+    try {
+      if (pc) {
+        ignorePeerConnectionClose = true;
+        pc.close();
+        ignorePeerConnectionClose = false;
+        pc = null;
+        pendingIce.length = 0;
+        controlChannel = null;
+        syncChannel = null;
+        connectionState = "new";
+        updateConnectionSnapshot({
+          peerConnectionState: "new",
+          inboundAudioTrack: false,
+          outboundAudioTrack: false,
+          controlChannelOpen: false,
+          syncChannelOpen: false,
         });
       }
-    };
+      logOfferStep(step);
 
-    pc.onconnectionstatechange = () => {
-      connectionState = pc?.connectionState ?? "new";
-      debug?.info("webrtc", "connection_state", connectionState);
-      updateConnectionSnapshot({ peerConnectionState: connectionState });
-      if (connectionState === "connected") {
-        autoReconnectAttempts = 0;
-        stopMicPump?.();
-        stopMicPump = null;
-        if (micStream && (options.micPump ?? "silent") === "silent") {
-          stopMicPump = createMicPump(
-            micStream,
-            () => pc?.connectionState === "connected",
-            debug,
-          );
+      step = "create_peer_connection";
+      ensureConnectedPromise();
+      pc = new runtime.RTCPeerConnection({ iceServers });
+      logOfferStep(step);
+
+      pc.ontrack = (event) => {
+        if (event.track.kind !== "audio") return;
+        const stream = event.streams[0] ?? new MediaStream([event.track]);
+        if (options.audioElement) {
+          options.audioElement.srcObject = stream;
+          void options.audioElement.play().catch(() => undefined);
         }
-        syncOutboundAudioTrack();
-      } else if (connectionState === "failed") {
-        handleTransportFailure("failed", "webrtc_failed");
-      } else if (connectionState === "closed") {
-        if (ignorePeerConnectionClose || gracefulDisconnect) {
-          if (gracefulDisconnect) {
-            rejectConnectedWait(
-              new Error(`peer connection ${connectionState}`),
-              false,
+        options.onAgentAudioTrack?.(event.track);
+        updateConnectionSnapshot({ inboundAudioTrack: true });
+        debug?.info("webrtc", "agent_audio_track");
+      };
+
+      pc.ondatachannel = (event) => {
+        if (event.channel.label === VOICE_CONTROL_CHANNEL_LABEL) {
+          wireControl(event.channel);
+        } else if (event.channel.label === VOICE_SYNC_CHANNEL_LABEL) {
+          wireSync(event.channel);
+        }
+      };
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          sendToServer({
+            type: "ice-candidate",
+            targetPeerId: VOICE_AGENT_SERVER_PEER_ID,
+            candidate: event.candidate.toJSON(),
+          });
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        connectionState = pc?.connectionState ?? "new";
+        debug?.info("webrtc", "connection_state", connectionState);
+        updateConnectionSnapshot({ peerConnectionState: connectionState });
+        if (connectionState === "connected") {
+          autoReconnectAttempts = 0;
+          stopMicPump?.();
+          stopMicPump = null;
+          if (micStream && (options.micPump ?? "silent") === "silent") {
+            stopMicPump = createMicPump(
+              micStream,
+              () => pc?.connectionState === "connected",
+              debug,
             );
           }
-          return;
+          syncOutboundAudioTrack();
+        } else if (connectionState === "failed") {
+          handleTransportFailure("failed", "webrtc_failed");
+        } else if (connectionState === "closed") {
+          if (ignorePeerConnectionClose || gracefulDisconnect) {
+            if (gracefulDisconnect) {
+              rejectConnectedWait(
+                new Error(`peer connection ${connectionState}`),
+                false,
+              );
+            }
+            return;
+          }
+          handleTransportFailure("closed", "webrtc_closed");
         }
-        handleTransportFailure("closed", "webrtc_closed");
-      }
-    };
+      };
 
-    pc.oniceconnectionstatechange = () => {
-      debug?.info(
-        "webrtc",
-        "ice_connection_state",
-        pc?.iceConnectionState ?? "unknown",
-      );
-    };
+      pc.oniceconnectionstatechange = () => {
+        debug?.info(
+          "webrtc",
+          "ice_connection_state",
+          pc?.iceConnectionState ?? "unknown",
+        );
+      };
 
-    pc.onicegatheringstatechange = () => {
-      debug?.info(
-        "webrtc",
-        "ice_gathering_state",
-        pc?.iceGatheringState ?? "unknown",
-      );
-    };
+      pc.onicegatheringstatechange = () => {
+        debug?.info(
+          "webrtc",
+          "ice_gathering_state",
+          pc?.iceGatheringState ?? "unknown",
+        );
+      };
 
-    if (micStream) {
-      await attachMicTracks(pc, micStream);
-      syncOutboundAudioTrack();
-      if ((options.micPump ?? "silent") === "external") {
-        for (const track of micStream.getAudioTracks()) {
-          if (isWriteSampleTrack(track)) {
-            void track
-              .writeSample(new Uint8Array(960), 5)
-              .catch(() => undefined);
-            debug?.info("voice", "mic_kick_sent");
+      if (micStream) {
+        step = "attach_mic";
+        await attachMicTracks(pc, micStream);
+        syncOutboundAudioTrack();
+        if ((options.micPump ?? "silent") === "external") {
+          for (const track of micStream.getAudioTracks()) {
+            if (isWriteSampleTrack(track)) {
+              void track
+                .writeSample(new Uint8Array(960), 5)
+                .catch(() => undefined);
+              debug?.info("voice", "mic_kick_sent");
+            }
           }
         }
+        logOfferStep(step);
       }
-    }
 
-    await pc.setRemoteDescription(sdp);
-    for (const candidate of pendingIce.splice(0)) {
-      await pc.addIceCandidate(candidate);
-    }
+      step = "set_remote_description";
+      await pc.setRemoteDescription(sdp);
+      logOfferStep(step);
 
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    await waitForIceGatheringComplete(pc);
-    sendToServer({
-      type: "answer",
-      targetPeerId: VOICE_AGENT_SERVER_PEER_ID,
-      sdp: pc.localDescription,
-    });
-    debug?.info("signaling", "answer_sent");
+      step = "drain_pending_ice";
+      for (const candidate of pendingIce.splice(0)) {
+        await pc.addIceCandidate(candidate);
+      }
+      logOfferStep(step);
+
+      step = "create_answer";
+      const answer = await pc.createAnswer();
+      logOfferStep(step);
+
+      step = "set_local_description";
+      await pc.setLocalDescription(answer);
+      logOfferStep(step);
+
+      step = "wait_ice_gathering";
+      await waitForIceGatheringComplete(pc);
+      logOfferStep(step);
+
+      step = "send_answer";
+      sendToServer({
+        type: "answer",
+        targetPeerId: VOICE_AGENT_SERVER_PEER_ID,
+        sdp: pc.localDescription,
+      });
+      debug?.info("signaling", "answer_sent");
+      logOfferStep(step);
+    } catch (error: unknown) {
+      const detail = error instanceof Error ? error.message : String(error);
+      const message = `WebRTC offer handler failed at ${step}: ${detail}`;
+      debug?.error(
+        "signaling",
+        "offer_handler_failed",
+        `${message} elapsed_ms=${Date.now() - startedAtMs}`,
+      );
+      notifySessionError(
+        createLocalSessionError({
+          code: "WEBRTC_SDP_NEGOTIATION_FAILED",
+          message,
+          sessionId: orchestratorSessionId,
+          recoverable: canAutoReconnectTransport(),
+        }),
+      );
+      rejectConnectedWait(new Error(message), canAutoReconnectTransport());
+    }
   };
 
   const scheduleAutoReconnect = (reason: string): void => {
@@ -862,6 +921,9 @@ export async function connectBrowserVoiceSession(
 
     while (true) {
       if (isWebRtcConnectionReady(connectionSnapshot, readinessProfile)) return;
+      if (pendingConnectFailure) {
+        throw pendingConnectFailure;
+      }
 
       const remainingMs = deadlineMs - Date.now();
       if (remainingMs <= 0) {
