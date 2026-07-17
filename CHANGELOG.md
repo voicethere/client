@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.7.8 — 2026-07-17
+
+### Fixed
+
+- **Terminal `session_error` vs transport failure** — when the server sends `session_error` with `recoverable: false` (e.g. `AGENT_HANDLER_FAILED`), mark the session as gracefully disconnected so auto-reconnect does not overwrite the error with `WEBRTC_CONNECTION_FAILED`.
+
 ## 0.7.7 — 2026-07-15
 
 ### Changed
