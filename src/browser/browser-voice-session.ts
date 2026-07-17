@@ -318,14 +318,22 @@ export async function connectBrowserVoiceSession(
     emitSessionError(options.onSessionError, event);
   };
 
+  const markTerminalRemoteSessionError = (event: SessionErrorEvent): void => {
+    if (event.recoverable === false) {
+      gracefulDisconnect = true;
+    }
+  };
+
   const handleControlPayload = (message: Record<string, unknown>) => {
     if (isSessionErrorEvent(message)) {
       notifySessionError(message);
+      markTerminalRemoteSessionError(message);
       return;
     }
     const legacy = parseLegacyAgentError(message, orchestratorSessionId);
     if (legacy) {
       notifySessionError(legacy);
+      markTerminalRemoteSessionError(legacy);
       return;
     }
     options.onControlMessage?.(message);
@@ -365,24 +373,26 @@ export async function connectBrowserVoiceSession(
   ): void => {
     stopMicPump?.();
     stopMicPump = null;
-    if (state === "failed") {
-      notifySessionError({
-        type: "session_error",
-        code: "WEBRTC_CONNECTION_FAILED",
-        message: "WebRTC peer connection failed",
-        session_id: orchestratorSessionId,
-        recoverable: canAutoReconnectTransport(),
-        occurred_at: new Date().toISOString(),
-      });
-    } else if (!gracefulDisconnect) {
-      notifySessionError({
-        type: "session_error",
-        code: "WEBRTC_CONNECTION_CLOSED",
-        message: "WebRTC peer connection closed unexpectedly",
-        session_id: orchestratorSessionId,
-        recoverable: canAutoReconnectTransport(),
-        occurred_at: new Date().toISOString(),
-      });
+    if (!gracefulDisconnect) {
+      if (state === "failed") {
+        notifySessionError({
+          type: "session_error",
+          code: "WEBRTC_CONNECTION_FAILED",
+          message: "WebRTC peer connection failed",
+          session_id: orchestratorSessionId,
+          recoverable: canAutoReconnectTransport(),
+          occurred_at: new Date().toISOString(),
+        });
+      } else {
+        notifySessionError({
+          type: "session_error",
+          code: "WEBRTC_CONNECTION_CLOSED",
+          message: "WebRTC peer connection closed unexpectedly",
+          session_id: orchestratorSessionId,
+          recoverable: canAutoReconnectTransport(),
+          occurred_at: new Date().toISOString(),
+        });
+      }
     }
 
     const retriable = canAutoReconnectTransport();
