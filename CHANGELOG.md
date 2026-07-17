@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## 0.7.9 — 2026-07-17
+
+### Added
+
+- **`WEBRTC_SDP_NEGOTIATION_FAILED`** — local `session_error` when the inbound server offer handler fails (step name + underlying error in the message).
+- **Offer handler step logs** — `offer_step` / `offer_handler_failed` debug events for `set_remote_description`, `create_answer`, ICE gathering, and `answer_sent` triage.
+
+### Fixed
+
+- **`waitForConnected()` after early offer failure** — preserve non-retriable SDP handler errors via `pendingConnectFailure` so callers fail fast instead of waiting for the connect timeout.
+
 ## 0.7.8 — 2026-07-17
 
 ### Fixed
