@@ -39,6 +39,17 @@ import {
 /** Game-sync DC traffic logged at debug level — E2E stderr needs `LOAD_TEST_CLIENT_DEBUG=1`. */
 const HIGH_FREQUENCY_DC_TYPES = new Set(["keepalive", "state", "tick"]);
 
+/**
+ * Native RTCPeerConnection rejects offers without `a=ice-ufrag` (empty or truncated SDP).
+ * Detect before setRemoteDescription so we can same-session reconnect instead of hanging.
+ */
+export function remoteOfferHasIceUfrag(
+  sdp: RTCSessionDescriptionInit | null | undefined,
+): boolean {
+  const body = typeof sdp?.sdp === "string" ? sdp.sdp : "";
+  return /a=ice-ufrag\s*:/i.test(body);
+}
+
 function logDcMessage(
   debug: DebugConsole | undefined,
   name: string,
@@ -720,6 +731,11 @@ export async function connectBrowserVoiceSession(
       }
 
       step = "set_remote_description";
+      if (!remoteOfferHasIceUfrag(sdp)) {
+        throw new Error(
+          "set_remote_description called with no ice-ufrag (remote offer missing a=ice-ufrag)",
+        );
+      }
       await pc.setRemoteDescription(sdp);
       logOfferStep(step);
 
@@ -757,15 +773,22 @@ export async function connectBrowserVoiceSession(
         "offer_handler_failed",
         `${message} elapsed_ms=${Date.now() - startedAtMs}`,
       );
+      const retriable = canAutoReconnectTransport();
       notifySessionError(
         createLocalSessionError({
           code: "WEBRTC_SDP_NEGOTIATION_FAILED",
           message,
           sessionId: orchestratorSessionId,
-          recoverable: canAutoReconnectTransport(),
+          recoverable: retriable,
         }),
       );
-      rejectConnectedWait(new Error(message), canAutoReconnectTransport());
+      rejectConnectedWait(new Error(message), retriable);
+      // Same as transport failure: waitForConnected alone cannot recover without a
+      // fresh PC + offer. Under burst load, empty/malformed offers must trigger
+      // same-session signaling reconnect or the client hangs until connect timeout.
+      if (retriable) {
+        scheduleAutoReconnect("sdp_negotiation_failed");
+      }
     }
   };
 

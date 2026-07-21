@@ -95,7 +95,7 @@ class MockPeerConnection {
   async addIceCandidate(_candidate: RTCIceCandidateInit): Promise<void> {}
 
   async createAnswer(): Promise<RTCSessionDescriptionInit> {
-    return { type: "answer", sdp: "v=0" };
+    return { type: "answer", sdp: "v=0\r\na=ice-ufrag:local\r\n" };
   }
 
   async setLocalDescription(description: RTCSessionDescriptionInit): Promise<void> {
@@ -129,7 +129,10 @@ function sendOffer(ws: MockWebSocket): void {
     data: JSON.stringify({
       type: "offer",
       peerId: VOICE_AGENT_SERVER_PEER_ID,
-      sdp: { type: "offer", sdp: "v=0" },
+      sdp: {
+        type: "offer",
+        sdp: "v=0\r\na=ice-ufrag:server\r\na=ice-pwd:secret\r\n",
+      },
     }),
   });
 }

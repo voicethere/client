@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Same-session reconnect after `WEBRTC_SDP_NEGOTIATION_FAILED`** — malformed/empty remote offers (missing `a=ice-ufrag`) now trigger signaling reconnect under the default `same-session` policy so `waitForConnected()` can recover instead of hanging until timeout (scale-up burst flake class).
+
 ## 0.7.9 — 2026-07-17
 
 ### Added
