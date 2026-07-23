@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.7.11 — 2026-07-23
+
+### Changed
+
+- **Adaptive session provisioning polling** — replace fixed 1s status polls with backoff + jitter, and honor Session API `retry_after_ms` hints to cut control-plane load during wait queues.
+
 ## 0.7.10 — 2026-07-21
 
 ### Fixed
