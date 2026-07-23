@@ -1,4 +1,5 @@
 import type { DebugConsole } from "./debug-console.js";
+import { pollSessionStatus } from "./session-provision-poll.js";
 import {
   ProvisionedRunnerModeType,
   type ProvisionedRunnerMode,
@@ -52,6 +53,8 @@ export type SessionStatusResponse = {
   queue_last_seen_at?: string | null;
   /** Rough ETA in seconds based on queue position. */
   estimated_wait_seconds?: number | null;
+  /** Optional server hint for time until the next status poll (ms). */
+  retry_after_ms?: number | null;
   credentials?: SessionCredentials | null;
   created_at: string;
   updated_at: string;
@@ -92,110 +95,6 @@ export function isTerminalSessionJobStatus(status: SessionJobStatus): boolean {
 
 export function isCapacityWaitStatus(status: SessionStatusResponse): boolean {
   return status.status === "waiting";
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function pollSessionStatus(input: {
-  apiBase: string;
-  jobId: string;
-  headers: Record<string, string>;
-  pollIntervalMs: number;
-  pollTimeoutMs: number;
-  onStatus?: (status: SessionStatusResponse) => void;
-  onQueuePosition?: (position: number, status: SessionStatusResponse) => void;
-  onSessionError?: import("../session-errors.js").SessionErrorHandler;
-  debug?: DebugConsole;
-}): Promise<StartSessionResult> {
-  const started = Date.now();
-  const url = `${input.apiBase.replace(/\/$/, "")}/sessions/${input.jobId}`;
-
-  while (Date.now() - started < input.pollTimeoutMs) {
-    const res = await fetch(url, { headers: input.headers });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      const message = `GET session status failed (${res.status}): ${body}`;
-      emitSessionError(
-        input.onSessionError,
-        createLocalSessionError({
-          code: "PROVISIONING_FAILED",
-          message,
-          sessionId: input.jobId,
-        }),
-      );
-      return {
-        ok: false,
-        code: "HTTP_ERROR",
-        message,
-      };
-    }
-
-    const status = (await res.json()) as SessionStatusResponse;
-    input.onStatus?.(status);
-    if (
-      status.status === "waiting" &&
-      status.queue_position != null &&
-      status.queue_position > 0
-    ) {
-      input.onQueuePosition?.(status.queue_position, status);
-    }
-    input.debug?.info(
-      "provision",
-      status.status,
-      status.failure_message ?? undefined,
-      status,
-    );
-
-    if (status.status === "ready" && status.credentials) {
-      return {
-        ok: true,
-        credentials: {
-          ...status.credentials,
-          mode: status.credentials.mode ?? ProvisionedRunnerModeType.Voice,
-        },
-        jobId: input.jobId,
-      };
-    }
-
-    if (status.status === "failed") {
-      const code = mapProvisioningFailureCode(
-        status.failure_code ?? "ORCHESTRATOR_ERROR",
-      );
-      emitSessionError(
-        input.onSessionError,
-        createLocalSessionError({
-          code,
-          message: status.failure_message ?? "Session provisioning failed",
-          sessionId: input.jobId,
-          projectId: status.project_id,
-          buildId: status.build_id ?? undefined,
-        }),
-      );
-      return {
-        ok: false,
-        code: status.failure_code ?? "ORCHESTRATOR_ERROR",
-        message: status.failure_message ?? "Session provisioning failed",
-      };
-    }
-
-    await sleep(input.pollIntervalMs);
-  }
-
-  emitSessionError(
-    input.onSessionError,
-    createLocalSessionError({
-      code: "PROVISIONING_TIMEOUT",
-      message: "Session provisioning timed out",
-      sessionId: input.jobId,
-    }),
-  );
-  return {
-    ok: false,
-    code: "TIMEOUT",
-    message: "Session provisioning timed out",
-  };
 }
 
 function emitProvisionError(
