@@ -7,10 +7,21 @@ export {
   connectBrowserChatSession,
   connectDataSession,
   startSession,
+  fetchSessionApi,
+  DEFAULT_SESSION_API_RETRY_DELAYS_MS,
+  isRetryableSessionApiBody,
+  isRetryableSessionApiFailure,
+  isRetryableSessionApiNetworkError,
+  isRetryableSessionApiStatus,
   BrowserSessionModeType,
   ProvisionedRunnerModeType,
   VOICE_CONTROL_CHANNEL_LABEL,
   VOICE_SYNC_CHANNEL_LABEL,
+} from "../browser/browser-session.js";
+
+export type {
+  FetchSessionApiOptions,
+  SessionApiRetryRuntime,
 } from "../browser/browser-session.js";
 
 export type {

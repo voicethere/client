@@ -1,4 +1,5 @@
 import type { DebugConsole } from "./debug-console.js";
+import { fetchSessionApi } from "./session-api-retry.js";
 import { pollSessionStatus } from "./session-provision-poll.js";
 import {
   ProvisionedRunnerModeType,
@@ -139,11 +140,15 @@ export async function startSession(
 
   options.debug?.info("provision", "post_sessions", JSON.stringify(body));
 
-  const res = await fetch(`${apiBase}/sessions`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
+  const res = await fetchSessionApi(
+    `${apiBase}/sessions`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    },
+    { debug: options.debug, label: "POST /sessions" },
+  );
 
   if (res.status === 200) {
     const sync = (await res.json()) as SessionCredentials & {
