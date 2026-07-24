@@ -109,6 +109,16 @@ export {
 } from "./browser-voice-session.js";
 export { startSession } from "./session-provision.js";
 export {
+  DEFAULT_SESSION_API_RETRY_DELAYS_MS,
+  fetchSessionApi,
+  isRetryableSessionApiBody,
+  isRetryableSessionApiFailure,
+  isRetryableSessionApiNetworkError,
+  isRetryableSessionApiStatus,
+  type FetchSessionApiOptions,
+  type SessionApiRetryRuntime,
+} from "./session-api-retry.js";
+export {
   createLocalSessionError,
   emitSessionError,
   isSessionErrorEvent,

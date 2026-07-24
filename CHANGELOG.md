@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.7.12 — 2026-07-24
+
+### Added
+
+- **`fetchSessionApi`** — retries session-service `POST`/`GET` on Envoy-style 502–504 / `upstream connect error` / connection termination (and network `fetch failed`), with short backoff. Wired into `startSession` and status polling so rolling deploys do not fail one-shot polls.
+
 ## 0.7.11 — 2026-07-23
 
 ### Changed

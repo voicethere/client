@@ -1,4 +1,5 @@
 import type { DebugConsole } from "./debug-console.js";
+import { fetchSessionApi } from "./session-api-retry.js";
 import { ProvisionedRunnerModeType } from "./session-modes.js";
 import {
   createLocalSessionError,
@@ -149,7 +150,18 @@ export async function pollSessionStatus(input: {
   let previousProgress: SessionPollProgressSnapshot | null = null;
 
   while (runtime.now() - started < input.pollTimeoutMs) {
-    const res = await fetch(url, { headers: input.headers });
+    const res = await fetchSessionApi(
+      url,
+      { headers: input.headers },
+      {
+        debug: input.debug,
+        label: `GET /sessions/${input.jobId}`,
+        runtime: {
+          sleep: runtime.sleep,
+          fetch: globalThis.fetch.bind(globalThis),
+        },
+      },
+    );
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       const message = `GET session status failed (${res.status}): ${body}`;
