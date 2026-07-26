@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.7.13 — 2026-07-26
+
+### Added
+
+- **ICE candidate-pair diagnostics** — `getWebRtcDiagnostics()` / `summarizeRtcStatsReport` now resolve local/remote candidate types for every retained pair (order-independent), including failed non-selected pairs. Aggregate counts add `prflx` / unknown local candidates and total local candidate reports. Formatted lines stay redacted (no addresses, ports, URLs, or credentials).
+
 ## 0.7.12 — 2026-07-24
 
 ### Added

@@ -37,6 +37,7 @@ export type {
   WebRtcConnectionStatus,
   WebRtcReadinessProfile,
   WebRtcDiagnostics,
+  WebRtcIceCandidatePairSummary,
   WebRtcStatsSummary,
 } from "../browser/browser-session.js";
 
