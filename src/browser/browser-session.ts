@@ -171,6 +171,7 @@ export {
   formatWebRtcDiagnosticsLines,
   summarizeRtcStatsReport,
   type WebRtcDiagnostics,
+  type WebRtcIceCandidatePairSummary,
   type WebRtcStatsSummary,
 } from "./webrtc-diagnostics.js";
 
