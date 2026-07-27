@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.7.14 — 2026-07-27
+
 ### Added
 
 - **`disconnectAsync()`** — awaitable terminal cleanup barrier; awaits Node runtime `closeAsync()` when present. Close failure is diagnostic-only and never aborts cleanup. Emits `peer_close` (redacted).
