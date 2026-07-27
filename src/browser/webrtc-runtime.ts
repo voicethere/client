@@ -1,6 +1,11 @@
 /**
  * Injectable WebRTC + signaling primitives for browser and Node test runtimes.
  */
+
+import type { AwaitableCloseablePeerConnection } from "./peer-connection-close.js";
+
+export type { AwaitableCloseablePeerConnection };
+
 export type WebRtcRuntime = {
   WebSocket: {
     new (url: string, protocols?: string | string[]): WebSocket;
@@ -9,9 +14,7 @@ export type WebRtcRuntime = {
   RTCPeerConnection: {
     new (configuration?: RTCConfiguration): RTCPeerConnection;
   };
-  getUserMedia?: (
-    constraints: MediaStreamConstraints,
-  ) => Promise<MediaStream>;
+  getUserMedia?: (constraints: MediaStreamConstraints) => Promise<MediaStream>;
 };
 
 export function getDefaultBrowserRuntime(): WebRtcRuntime {
@@ -36,4 +39,14 @@ export function getDefaultBrowserRuntime(): WebRtcRuntime {
       return navigator.mediaDevices.getUserMedia(constraints);
     },
   };
+}
+
+/** True when a peer connection instance exposes awaitable native cleanup. */
+export function peerConnectionSupportsCloseAsync(
+  pc: RTCPeerConnection | null | undefined,
+): boolean {
+  return (
+    typeof (pc as AwaitableCloseablePeerConnection | null | undefined)
+      ?.closeAsync === "function"
+  );
 }

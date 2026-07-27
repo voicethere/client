@@ -48,3 +48,8 @@ export {
 } from "../browser/browser-session.js";
 
 export type { WebRtcRuntime } from "../browser/webrtc-runtime.js";
+
+export {
+  CLIENT_CAPABILITIES,
+  type ClientCapabilities,
+} from "../browser/client-capabilities.js";

@@ -30,6 +30,12 @@ import {
   getDefaultBrowserRuntime,
   type WebRtcRuntime,
 } from "./webrtc-runtime.js";
+import { closePeerConnectionAwaitable } from "./peer-connection-close.js";
+import {
+  emitDiagnosticSafely,
+  redactDiagnosticDetail,
+  type VoiceSessionDiagnosticHandler,
+} from "./voice-session-diagnostics.js";
 import { waitForIceGatheringComplete } from "./wait-for-ice-gathering.js";
 import {
   isWebRtcConnectRetryError,
@@ -111,6 +117,13 @@ export type BrowserVoiceSessionOptions = {
   onDebugEvent?: DebugConsole;
   /** Injectable WebRTC runtime (default: browser globals). */
   runtime?: WebRtcRuntime;
+  /**
+   * ICE transport policy for the peer connection (`all` | `relay`).
+   * Passed through to `RTCConfiguration.iceTransportPolicy`.
+   */
+  iceTransportPolicy?: "all" | "relay";
+  /** Structured diagnostics (peer close) — redacted; exceptions never affect lifecycle. */
+  onDiagnosticEvent?: VoiceSessionDiagnosticHandler;
   /** Opaque context forwarded to runner/agent on session start. */
   customerContext?: Record<string, unknown>;
   /** Unified handler for session_error DC events and local WebRTC failures. */
@@ -151,7 +164,10 @@ export type BrowserVoiceSessionOptions = {
 
 export type BrowserVoiceSession = {
   peerId: string;
+  /** Synchronous terminal invalidation (reconnect-friendly; uses sync `pc.close()`). */
   disconnect: () => void;
+  /** Awaitable terminal cleanup barrier (Node `closeAsync` when present). */
+  disconnectAsync: () => Promise<void>;
   /** Ask the server to close this WebRTC leg (graceful close signal on voice-control). */
   sendCloseSignal: (reason?: string) => void;
   sendSpeak: (text: string) => void;
@@ -632,7 +648,12 @@ export async function connectBrowserVoiceSession(
 
       step = "create_peer_connection";
       ensureConnectedPromise();
-      pc = new runtime.RTCPeerConnection({ iceServers });
+      pc = new runtime.RTCPeerConnection({
+        iceServers,
+        ...(options.iceTransportPolicy
+          ? { iceTransportPolicy: options.iceTransportPolicy }
+          : {}),
+      });
       logOfferStep(step);
 
       pc.ontrack = (event) => {
@@ -1040,15 +1061,110 @@ export async function connectBrowserVoiceSession(
       debug?.info("session", "close_signal", reason ?? "");
     },
     disconnect: () => {
+      // Sync terminal invalidation — must not await native close (reconnect opens WS promptly).
       gracefulDisconnect = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
       stopMicPump?.();
       stopMicPump = null;
-      controlChannel?.close();
-      syncChannel?.close();
-      pc?.close();
-      micStream?.getTracks().forEach((track) => track.stop());
-      ws?.close();
+      const localControl = controlChannel;
+      const localSync = syncChannel;
+      const localPc = pc;
+      const localWs = ws;
+      const localMic = micStream;
+      controlChannel = null;
+      syncChannel = null;
+      pc = null;
+      ws = null;
+      micStream = null;
+      try {
+        localControl?.close();
+      } catch {
+        /* ignore */
+      }
+      try {
+        localSync?.close();
+      } catch {
+        /* ignore */
+      }
+      if (localWs) {
+        localWs.onclose = null;
+        localWs.onmessage = null;
+        localWs.onerror = null;
+        try {
+          localWs.close();
+        } catch {
+          /* ignore */
+        }
+      }
+      try {
+        localPc?.close();
+      } catch {
+        /* ignore */
+      }
+      localMic?.getTracks().forEach((track) => track.stop());
+      updateConnectionSnapshot({
+        signalingJoined: false,
+        peerConnectionState: "closed",
+        inboundAudioTrack: false,
+        outboundAudioTrack: false,
+        controlChannelOpen: false,
+        syncChannelOpen: false,
+      });
+      debug?.info("session", "disconnected");
+    },
+    disconnectAsync: async () => {
+      gracefulDisconnect = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+      stopMicPump?.();
+      stopMicPump = null;
+
+      const localControl = controlChannel;
+      const localSync = syncChannel;
+      const localPc = pc;
+      const localWs = ws;
+      const localMic = micStream;
+      controlChannel = null;
+      syncChannel = null;
+      pc = null;
+      ws = null;
+      micStream = null;
+
+      try {
+        localControl?.close();
+      } catch {
+        /* ignore */
+      }
+      try {
+        localSync?.close();
+      } catch {
+        /* ignore */
+      }
+      if (localWs) {
+        localWs.onclose = null;
+        localWs.onmessage = null;
+        localWs.onerror = null;
+        try {
+          localWs.close();
+        } catch {
+          /* ignore */
+        }
+      }
+      localMic?.getTracks().forEach((track) => track.stop());
+
+      const closeResult = await closePeerConnectionAwaitable(localPc);
+      emitDiagnosticSafely(options.onDiagnosticEvent, {
+        type: "peer_close",
+        mode: closeResult.mode,
+        durationMs: closeResult.durationMs,
+        timedOut: closeResult.timedOut,
+        context: "disconnect",
+        ...(closeResult.error !== undefined
+          ? { error: redactDiagnosticDetail(closeResult.error) }
+          : {}),
+      });
+
       updateConnectionSnapshot({
         signalingJoined: false,
         peerConnectionState: "closed",

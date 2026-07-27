@@ -32,6 +32,8 @@ export type ConnectBrowserSessionOptions = {
   maxAutoReconnectAttempts?: number;
   onReconnecting?: (attempt: number) => void;
   onConnectionStatus?: (status: WebRtcConnectionStatus) => void;
+  iceTransportPolicy?: BrowserVoiceSessionOptions["iceTransportPolicy"];
+  onDiagnosticEvent?: BrowserVoiceSessionOptions["onDiagnosticEvent"];
 };
 
 export type BrowserSession = BrowserVoiceSession & {
@@ -84,6 +86,8 @@ export async function connectBrowserSession(
     maxAutoReconnectAttempts: options.maxAutoReconnectAttempts,
     onReconnecting: options.onReconnecting,
     onConnectionStatus: options.onConnectionStatus,
+    iceTransportPolicy: options.iceTransportPolicy,
+    onDiagnosticEvent: options.onDiagnosticEvent,
   });
 
   return { ...session, mode: resolvedMode };
@@ -177,4 +181,21 @@ export {
 
 export type { DebugConsole, DebugEvent } from "./debug-console.js";
 export type { WebRtcRuntime } from "./webrtc-runtime.js";
-export { getDefaultBrowserRuntime } from "./webrtc-runtime.js";
+export {
+  getDefaultBrowserRuntime,
+  peerConnectionSupportsCloseAsync,
+} from "./webrtc-runtime.js";
+export {
+  closePeerConnectionAwaitable,
+  type AwaitableCloseablePeerConnection,
+  type PeerCloseResult,
+} from "./peer-connection-close.js";
+export type {
+  VoiceSessionDiagnosticEvent,
+  VoiceSessionDiagnosticHandler,
+} from "./voice-session-diagnostics.js";
+export { redactDiagnosticDetail } from "./voice-session-diagnostics.js";
+export {
+  CLIENT_CAPABILITIES,
+  type ClientCapabilities,
+} from "./client-capabilities.js";

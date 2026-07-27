@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`disconnectAsync()`** — awaitable terminal cleanup barrier; awaits Node runtime `closeAsync()` when present. Close failure is diagnostic-only and never aborts cleanup. Emits `peer_close` (redacted).
+- **`CLIENT_CAPABILITIES.iceTransportPolicy`** — explicit package capability export for e2e fail-closed checks (`/browser` and `/node` entry points).
+- **`iceTransportPolicy`** option — `"all" | "relay"` pass-through to `RTCConfiguration` for forced-relay TURN smokes.
+
+### Changed
+
+- **`disconnect()` remains synchronous** — terminal invalidation (timers, WebSocket, peer/channels, mic) using standard sync `pc.close()`. Prefer `disconnectAsync()` when callers need to await native cleanup.
+- **Removed startup ICE PC reconstruction** — race-prone automatic peer rebuild on failed/disconnected startup was dropped. Existing same-session signaling reconnect is unchanged.
+- Diagnostic redaction covers `http(s)`, `ws(s)`, `turn(s)`, `stun` URIs, join tokens, JSON credentials, and SDP `ice-pwd`; async diagnostic handler rejections are isolated.
+
 ## 0.7.13 — 2026-07-26
 
 ### Added
