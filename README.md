@@ -75,19 +75,19 @@ See [`examples/browser-test/README.md`](examples/browser-test/README.md).
 
 ## Ending a session
 
-| Action                | API                                | Server `end_reason`   |
-| --------------------- | ---------------------------------- | --------------------- |
-| Local teardown        | `session.disconnect()`             | `client_disconnected` |
-| Graceful close signal | `session.sendCloseSignal(reason?)` | `client_close_signal` |
-| Server idle timeout   | _(automatic)_                      | `idle_timeout`        |
+| Action                | API                                                                               | Server `end_reason`   |
+| --------------------- | --------------------------------------------------------------------------------- | --------------------- |
+| Local teardown        | `session.disconnect()` (sync) or `session.disconnectAsync()` (await native close) | `client_disconnected` |
+| Graceful close signal | `session.sendCloseSignal(reason?)`                                                | `client_close_signal` |
+| Server idle timeout   | _(automatic)_                                                                     | `idle_timeout`        |
 
 ## Reconnect and billing
 
-| UI / API | Behavior |
-| -------- | -------- |
-| Dashboard **Reconnect** or embed **Connect** after disconnect | Calls `startSession()` → **new orchestrator session id**, new Supabase row, new billing period once WebRTC connects |
-| Unintentional drop (network, signaling close) | Default `reconnectPolicy: "same-session"` re-joins with the **same credentials** and `peerId` (auto-retry with backoff) |
-| Manual `session.reconnect()` | Same orchestrator session — re-opens signaling only |
+| UI / API                                                      | Behavior                                                                                                                |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Dashboard **Reconnect** or embed **Connect** after disconnect | Calls `startSession()` → **new orchestrator session id**, new Supabase row, new billing period once WebRTC connects     |
+| Unintentional drop (network, signaling close)                 | Default `reconnectPolicy: "same-session"` re-joins with the **same credentials** and `peerId` (auto-retry with backoff) |
+| Manual `session.reconnect()`                                  | Same orchestrator session — re-opens signaling only                                                                     |
 
 Billing starts when the runner reports a billable WebRTC leg (voice: connected PC + open control channel + agent; data-only: PC + DC). Provision alone does not bill.
 
@@ -114,7 +114,10 @@ Configure idle timeouts per project in the dashboard **Session settings** panel 
 Pass `onSessionError` to `startSession` and `connectBrowserSession` for a unified handler across provisioning failures, WebRTC errors, and runner `session_error` data-channel events:
 
 ```typescript
-import { startSession, connectBrowserSession } from "@voicethere/client/browser";
+import {
+  startSession,
+  connectBrowserSession,
+} from "@voicethere/client/browser";
 
 const provision = await startSession({
   apiBase: "https://sessions.example/v1",
