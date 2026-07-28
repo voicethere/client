@@ -701,10 +701,7 @@ export async function connectBrowserVoiceSession(
     wireBinaryChannel(channel, binding.kind, isChannelCurrent);
   };
 
-  const wireControl = (
-    channel: RTCDataChannel,
-    isPcCurrent: () => boolean,
-  ) => {
+  const wireControl = (channel: RTCDataChannel, isPcCurrent: () => boolean) => {
     bindDataChannel(
       channel,
       {
@@ -861,8 +858,7 @@ export async function connectBrowserVoiceSession(
           if (micStream && (options.micPump ?? "silent") === "silent") {
             stopMicPump = createMicPump(
               micStream,
-              () =>
-                pc === localPc && localPc.connectionState === "connected",
+              () => pc === localPc && localPc.connectionState === "connected",
               debug,
             );
           }
@@ -1111,9 +1107,7 @@ export async function connectBrowserVoiceSession(
           : {}),
       });
       if (closeResult.status !== "closed") {
-        throw new Error(
-          `reconnect blocked: peer close ${closeResult.status}`,
-        );
+        throw new Error(`reconnect blocked: peer close ${closeResult.status}`);
       }
       if (boundEpoch !== signalingEpoch) {
         return;
@@ -1259,9 +1253,11 @@ export async function connectBrowserVoiceSession(
   }
   publishConnectionStatus();
 
+  // Do not log on every failed send — open/close transitions are already
+  // emitted once via bindDataChannel (`dc/open`, `dc/close`). Callers (e.g. e2e
+  // readiness polls) may probe often while connecting.
   const requireOpenControl = (): RTCDataChannel => {
     if (!controlChannel || controlChannel.readyState !== "open") {
-      debug?.error("dc", "control_not_open");
       throw new Error("voice-control data channel is not open");
     }
     return controlChannel;
@@ -1269,7 +1265,6 @@ export async function connectBrowserVoiceSession(
 
   const requireOpenSync = (): RTCDataChannel => {
     if (!syncChannel || syncChannel.readyState !== "open") {
-      debug?.error("dc", "sync_not_open");
       throw new Error("voicethere-sync data channel is not open");
     }
     return syncChannel;

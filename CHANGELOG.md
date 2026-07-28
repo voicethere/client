@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.7.16 — 2026-07-28
+
+### Changed
+
+- Stop logging `dc/control_not_open` / `dc/sync_not_open` on every failed send while channels are connecting. Open/close transitions remain single `dc/open` / `dc/close` events (avoids spam from readiness polls).
+
 ## 0.7.15 — 2026-07-28
 
 ### Added
