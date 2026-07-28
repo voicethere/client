@@ -45,8 +45,13 @@ import {
   WebRtcConnectRetryError,
 } from "./webrtc-connect-retry.js";
 
-/** Game-sync DC traffic logged at debug level — E2E stderr needs `LOAD_TEST_CLIENT_DEBUG=1`. */
-const HIGH_FREQUENCY_DC_TYPES = new Set(["keepalive", "state", "tick"]);
+/** High-rate DC traffic logged at debug level — E2E stderr needs `LOAD_TEST_CLIENT_DEBUG=1`. */
+const HIGH_FREQUENCY_DC_TYPES = new Set([
+  "keepalive",
+  "state",
+  "tick",
+  "position",
+]);
 
 /**
  * Native RTCPeerConnection rejects offers without `a=ice-ufrag` (empty or truncated SDP).
