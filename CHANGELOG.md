@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## 0.7.15 — 2026-07-28
+
+### Added
+
+- **`StartSessionOptions.signal`** — optional `AbortSignal` cancels `POST /sessions` and status-poll fetches/retry sleeps via `fetchSessionApi` / `pollSessionStatus`.
+- **`CLIENT_CAPABILITIES.startSessionAbortSignal`** — explicit capability flag so load/soak harnesses can fail closed when the installed package cannot cancel in-flight provisioning.
+
+### Notes
+
+- Consumers that require abortable `startSession` (canonical voice soak) must install this release (or newer). Older published `0.7.14` builds do not advertise the capability.
+
 ## 0.7.14 — 2026-07-27
 
 ### Added

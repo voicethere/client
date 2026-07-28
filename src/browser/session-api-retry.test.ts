@@ -144,4 +144,26 @@ describe("fetchSessionApi", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
   });
+
+  it("aborts retry sleep when signal aborts", async () => {
+    const ac = new AbortController();
+    const sleep = vi.fn(async () => undefined);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response("connection termination", { status: 503 }),
+      );
+
+    const pending = fetchSessionApi(
+      "https://sessions.example/v1/sessions/x",
+      undefined,
+      {
+        delaysMs: [5_000],
+        signal: ac.signal,
+        runtime: { sleep, fetch: fetchMock as unknown as typeof fetch },
+      },
+    );
+    queueMicrotask(() => ac.abort(new Error("cancelled")));
+    await expect(pending).rejects.toThrow(/cancelled|aborted/i);
+  });
 });

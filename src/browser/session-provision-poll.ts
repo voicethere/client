@@ -131,6 +131,40 @@ function toPollProgressSnapshot(
   };
 }
 
+function throwIfPollAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("The operation was aborted.", "AbortError");
+}
+
+async function sleepPollAbortable(
+  ms: number,
+  sleep: (ms: number) => Promise<void>,
+  signal?: AbortSignal,
+): Promise<void> {
+  throwIfPollAborted(signal);
+  if (!signal) {
+    await sleep(ms);
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(
+        signal.reason instanceof Error
+          ? signal.reason
+          : new DOMException("The operation was aborted.", "AbortError"),
+      );
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export async function pollSessionStatus(input: {
   apiBase: string;
   jobId: string;
@@ -142,6 +176,7 @@ export async function pollSessionStatus(input: {
   onSessionError?: import("../session-errors.js").SessionErrorHandler;
   debug?: DebugConsole;
   runtime?: SessionPollRuntime;
+  signal?: AbortSignal;
 }): Promise<StartSessionResult> {
   const runtime = input.runtime ?? defaultSessionPollRuntime;
   const started = runtime.now();
@@ -150,12 +185,14 @@ export async function pollSessionStatus(input: {
   let previousProgress: SessionPollProgressSnapshot | null = null;
 
   while (runtime.now() - started < input.pollTimeoutMs) {
+    throwIfPollAborted(input.signal);
     const res = await fetchSessionApi(
       url,
-      { headers: input.headers },
+      { headers: input.headers, signal: input.signal },
       {
         debug: input.debug,
         label: `GET /sessions/${input.jobId}`,
+        signal: input.signal,
         runtime: {
           sleep: runtime.sleep,
           fetch: globalThis.fetch.bind(globalThis),
@@ -242,7 +279,7 @@ export async function pollSessionStatus(input: {
     previousProgress = currentProgress;
     pollAttemptIndex += 1;
 
-    await runtime.sleep(delayMs);
+    await sleepPollAbortable(delayMs, runtime.sleep, input.signal);
   }
 
   emitSessionError(

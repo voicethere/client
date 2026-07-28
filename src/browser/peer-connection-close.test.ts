@@ -8,6 +8,7 @@ describe("closePeerConnectionAwaitable", () => {
     const pc = { close } as unknown as RTCPeerConnection;
     const result = await closePeerConnectionAwaitable(pc);
     expect(close).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("closed");
     expect(result.mode).toBe("sync");
     expect(result.timedOut).toBe(false);
   });
@@ -29,11 +30,12 @@ describe("closePeerConnectionAwaitable", () => {
     expect(closeAsync).toHaveBeenCalledTimes(1);
     expect(close).not.toHaveBeenCalled();
     expect(resolved).toBe(true);
+    expect(result.status).toBe("closed");
     expect(result.mode).toBe("async");
     expect(result.timedOut).toBe(false);
   });
 
-  it("bounds hung closeAsync with timeout", async () => {
+  it("bounds hung closeAsync with timed_out (not closed)", async () => {
     vi.useFakeTimers();
     try {
       const closeAsync = vi.fn(() => new Promise<void>(() => undefined));
@@ -45,22 +47,24 @@ describe("closePeerConnectionAwaitable", () => {
       await vi.advanceTimersByTimeAsync(1000);
       const result = await pending;
       expect(result.mode).toBe("async");
+      expect(result.status).toBe("timed_out");
       expect(result.timedOut).toBe(true);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("no-ops for null peer connection", async () => {
+  it("no-ops for null peer connection as closed", async () => {
     const result = await closePeerConnectionAwaitable(null);
     expect(result).toEqual({
+      status: "closed",
       mode: "sync",
       durationMs: 0,
       timedOut: false,
     });
   });
 
-  it("does not reject when closeAsync rejects", async () => {
+  it("reports failed when closeAsync rejects", async () => {
     const closeAsync = vi.fn(async () => {
       throw new Error("native close boom");
     });
@@ -68,7 +72,19 @@ describe("closePeerConnectionAwaitable", () => {
       close: vi.fn(),
       closeAsync,
     } as unknown as RTCPeerConnection);
+    expect(result.status).toBe("failed");
     expect(result.mode).toBe("async");
+    expect(result.error).toBeInstanceOf(Error);
+  });
+
+  it("reports failed when sync close throws", async () => {
+    const result = await closePeerConnectionAwaitable({
+      close: () => {
+        throw new Error("sync close boom");
+      },
+    } as unknown as RTCPeerConnection);
+    expect(result.status).toBe("failed");
+    expect(result.mode).toBe("sync");
     expect(result.error).toBeInstanceOf(Error);
   });
 });

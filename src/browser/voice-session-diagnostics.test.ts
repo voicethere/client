@@ -75,6 +75,7 @@ describe("emitDiagnosticSafely", () => {
     expect(() =>
       emitDiagnosticSafely(handler, {
         type: "peer_close",
+        status: "closed",
         mode: "sync",
         durationMs: 1,
         timedOut: false,
@@ -100,6 +101,7 @@ describe("emitDiagnosticSafely", () => {
           },
           {
             type: "peer_close",
+            status: "failed",
             mode: "async",
             durationMs: 2,
             timedOut: false,

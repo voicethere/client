@@ -189,6 +189,7 @@ export {
   closePeerConnectionAwaitable,
   type AwaitableCloseablePeerConnection,
   type PeerCloseResult,
+  type PeerCloseStatus,
 } from "./peer-connection-close.js";
 export type {
   VoiceSessionDiagnosticEvent,

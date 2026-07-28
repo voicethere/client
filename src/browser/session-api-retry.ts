@@ -64,7 +64,43 @@ export type FetchSessionApiOptions = {
   debug?: DebugConsole;
   /** Label for debug logs (e.g. GET /sessions/:id). */
   label?: string;
+  /** Abort fetch attempts and retry sleeps. */
+  signal?: AbortSignal;
 };
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("The operation was aborted.", "AbortError");
+}
+
+async function sleepAbortable(
+  ms: number,
+  sleep: (ms: number) => Promise<void>,
+  signal?: AbortSignal,
+): Promise<void> {
+  throwIfAborted(signal);
+  if (!signal) {
+    await sleep(ms);
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(
+        signal.reason instanceof Error
+          ? signal.reason
+          : new DOMException("The operation was aborted.", "AbortError"),
+      );
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 /**
  * fetch() with retries for Envoy/ingress blips (502–504, upstream connect errors).
@@ -82,8 +118,12 @@ export async function fetchSessionApi(
 
   let lastError: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    throwIfAborted(options?.signal);
     try {
-      const response = await runtime.fetch(input, init);
+      const response = await runtime.fetch(input, {
+        ...init,
+        signal: options?.signal ?? init?.signal,
+      });
       if (
         response.ok ||
         (response.status < 500 && !isRetryableSessionApiStatus(response.status))
@@ -108,10 +148,13 @@ export async function fetchSessionApi(
         "session_api_retry",
         `${label} status=${response.status} attempt=${attempt + 1}/${maxAttempts} delay_ms=${delayMs}`,
       );
-      await runtime.sleep(delayMs);
+      await sleepAbortable(delayMs, runtime.sleep, options?.signal);
       continue;
     } catch (error: unknown) {
       lastError = error;
+      if (options?.signal?.aborted) {
+        throwIfAborted(options.signal);
+      }
       if (
         !isRetryableSessionApiNetworkError(error) ||
         attempt >= maxAttempts - 1
@@ -124,7 +167,7 @@ export async function fetchSessionApi(
         "session_api_retry",
         `${label} network_error attempt=${attempt + 1}/${maxAttempts} delay_ms=${delayMs}`,
       );
-      await runtime.sleep(delayMs);
+      await sleepAbortable(delayMs, runtime.sleep, options?.signal);
     }
   }
 
