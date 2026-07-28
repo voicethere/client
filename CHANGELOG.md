@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.7.17 — 2026-07-28
+
+### Changed
+
+- Treat control-channel JSON `position` as high-frequency: log at debug (with `keepalive` / `state` / `tick`) so load/redis-sync smokes stay quiet unless `LOAD_TEST_CLIENT_DEBUG=1`.
+
 ## 0.7.16 — 2026-07-28
 
 ### Changed
