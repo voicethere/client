@@ -80,6 +80,11 @@ export type StartSessionOptions = {
   onQueuePosition?: (position: number, status: SessionStatusResponse) => void;
   onSessionError?: import("../session-errors.js").SessionErrorHandler;
   debug?: DebugConsole;
+  /**
+   * Abort in-flight POST /sessions and status polling (fetch + retry sleeps).
+   * When aborted, startSession rejects with the abort reason (or AbortError).
+   */
+  signal?: AbortSignal;
 };
 
 export type StartSessionResult =
@@ -138,6 +143,12 @@ export async function startSession(
     wait_for_capacity: options.waitForCapacity ?? true,
   };
 
+  if (options.signal?.aborted) {
+    throw options.signal.reason instanceof Error
+      ? options.signal.reason
+      : new DOMException("startSession aborted", "AbortError");
+  }
+
   options.debug?.info("provision", "post_sessions", JSON.stringify(body));
 
   const res = await fetchSessionApi(
@@ -146,8 +157,9 @@ export async function startSession(
       method: "POST",
       headers,
       body: JSON.stringify(body),
+      signal: options.signal,
     },
-    { debug: options.debug, label: "POST /sessions" },
+    { debug: options.debug, label: "POST /sessions", signal: options.signal },
   );
 
   if (res.status === 200) {
@@ -206,5 +218,6 @@ export async function startSession(
     onQueuePosition: options.onQueuePosition,
     onSessionError: options.onSessionError,
     debug: options.debug,
+    signal: options.signal,
   });
 }

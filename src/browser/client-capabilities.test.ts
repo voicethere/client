@@ -9,8 +9,13 @@ describe("CLIENT_CAPABILITIES", () => {
     expect(CLIENT_CAPABILITIES.iceTransportPolicy).toBe(true);
   });
 
+  it("advertises startSessionAbortSignal from source module", () => {
+    expect(CLIENT_CAPABILITIES.startSessionAbortSignal).toBe(true);
+  });
+
   it("is re-exported from browser-session entry source", () => {
     expect(fromBrowserSession.iceTransportPolicy).toBe(true);
+    expect(fromBrowserSession.startSessionAbortSignal).toBe(true);
   });
 });
 

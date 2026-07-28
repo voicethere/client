@@ -2,10 +2,17 @@
 
 export type VoiceSessionDiagnosticEvent = {
   type: "peer_close";
+  /** Strict native close outcome (`closed` / `timed_out` / `failed`). */
+  status: "closed" | "timed_out" | "failed";
   mode: "async" | "sync";
   durationMs: number;
   timedOut: boolean;
-  context: "disconnect" | "reset" | "failed_connect";
+  context:
+    | "disconnect"
+    | "reset"
+    | "failed_connect"
+    | "offer_replace"
+    | "reconnect";
   /** Redacted close failure summary when native close rejects (no URL/token/detail dump). */
   error?: string;
 };

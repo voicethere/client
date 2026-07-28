@@ -30,7 +30,10 @@ import {
   getDefaultBrowserRuntime,
   type WebRtcRuntime,
 } from "./webrtc-runtime.js";
-import { closePeerConnectionAwaitable } from "./peer-connection-close.js";
+import {
+  closePeerConnectionAwaitable,
+  type PeerCloseResult,
+} from "./peer-connection-close.js";
 import {
   emitDiagnosticSafely,
   redactDiagnosticDetail,
@@ -164,10 +167,17 @@ export type BrowserVoiceSessionOptions = {
 
 export type BrowserVoiceSession = {
   peerId: string;
-  /** Synchronous terminal invalidation (reconnect-friendly; uses sync `pc.close()`). */
+  /**
+   * Synchronous terminal invalidation (reconnect-friendly; uses sync `pc.close()`).
+   * Does not await native close — prefer {@link disconnectAsync} for soak/capacity.
+   * Safe if async close is in flight: does not call a second close or mask failure.
+   */
   disconnect: () => void;
-  /** Awaitable terminal cleanup barrier (Node `closeAsync` when present). */
-  disconnectAsync: () => Promise<void>;
+  /**
+   * Awaitable terminal cleanup barrier (Node `closeAsync` when present).
+   * Returns strict {@link PeerCloseResult} so callers can observe closed/timed_out/failed.
+   */
+  disconnectAsync: () => Promise<PeerCloseResult>;
   /** Ask the server to close this WebRTC leg (graceful close signal on voice-control). */
   sendCloseSignal: (reason?: string) => void;
   sendSpeak: (text: string) => void;
@@ -286,7 +296,8 @@ export async function connectBrowserVoiceSession(
   let controlChannel: RTCDataChannel | null = null;
   let syncChannel: RTCDataChannel | null = null;
   let micStream: MediaStream | null = null;
-  const pendingIce: RTCIceCandidateInit[] = [];
+  /** ICE candidates queued by negotiation generation until that PC is ready. */
+  const pendingIceByGeneration = new Map<number, RTCIceCandidateInit[]>();
   let connectionState: RTCPeerConnectionState | "new" = "new";
   let resolveConnected: (() => void) | null = null;
   let rejectConnected: ((error: Error) => void) | null = null;
@@ -294,6 +305,74 @@ export async function connectBrowserVoiceSession(
   let pendingConnectFailure: Error | null = null;
   let stopMicPump: (() => void) | null = null;
   let gracefulDisconnect = false;
+  /** Bumped on each offer / disconnect so stale answer/ICE paths cannot resurrect. */
+  let negotiationGeneration = 0;
+  /** Serializes overlapping createAnswer/setLocalDescription/gather/send paths. */
+  let offerChain: Promise<void> = Promise.resolve();
+  let disconnectAsyncInFlight: Promise<PeerCloseResult> | null = null;
+  /** Cached terminal disconnect outcome — repeats must not invent `closed` for a null pc. */
+  let terminalDisconnectResult: PeerCloseResult | null = null;
+  /** Generation of the live PC (mirrors offer gen at create); ICE/handlers ignore mismatches. */
+  let activePcGeneration = 0;
+  /**
+   * Signaling/reconnect epoch. Incremented only when starting a reconnect flight
+   * or on disconnect (invalidates in-flight WS handlers).
+   */
+  let signalingEpoch = 0;
+  /** True single-flight: concurrent reconnect callers share this promise. */
+  let reconnectFlight: Promise<void> | null = null;
+  /**
+   * After a timed_out/failed replace-close, further PC creation is blocked.
+   * The unsafe native PC may still be live — never invent `closed`.
+   */
+  let replacementBlockedResult: PeerCloseResult | null = null;
+  /** Retained reference after failed replace-close (do not retry native close). */
+  let quarantinedPc: RTCPeerConnection | null = null;
+  /** Per-PC intentional retire tracking (replaces a global ignore boolean). */
+  const intentionallyRetiringPcs = new WeakSet<RTCPeerConnection>();
+
+  const clearPendingIceGenerations = (keepGeneration?: number): void => {
+    if (keepGeneration === undefined) {
+      pendingIceByGeneration.clear();
+      return;
+    }
+    for (const generation of [...pendingIceByGeneration.keys()]) {
+      if (generation !== keepGeneration) {
+        pendingIceByGeneration.delete(generation);
+      }
+    }
+  };
+
+  const queuePendingIce = (
+    generation: number,
+    candidate: RTCIceCandidateInit,
+  ): void => {
+    const bucket = pendingIceByGeneration.get(generation);
+    if (bucket) {
+      bucket.push(candidate);
+    } else {
+      pendingIceByGeneration.set(generation, [candidate]);
+    }
+  };
+
+  const drainPendingIce = async (
+    targetPc: RTCPeerConnection,
+    generation: number,
+  ): Promise<void> => {
+    const bucket = pendingIceByGeneration.get(generation) ?? [];
+    pendingIceByGeneration.delete(generation);
+    for (const candidate of bucket) {
+      await targetPc.addIceCandidate(candidate).catch(() => undefined);
+    }
+  };
+
+  const assertReplacementAllowed = (): void => {
+    if (replacementBlockedResult) {
+      throw new Error(
+        `peer replacement blocked: previous close ${replacementBlockedResult.status}`,
+      );
+    }
+  };
   const reconnectPolicy = options.reconnectPolicy ?? "same-session";
   const maxAutoReconnectAttempts = options.maxAutoReconnectAttempts ?? 4;
   let autoReconnectAttempts = 0;
@@ -334,6 +413,8 @@ export async function connectBrowserVoiceSession(
     if (!isWebRtcConnectionReady(connectionSnapshot, readinessProfile)) return;
     pendingConnectFailure = null;
     resolveConnected?.();
+    // Success path must drop waiter handles immediately (not only timeout/reject).
+    clearConnectedWait();
   };
 
   const updateConnectionSnapshot = (
@@ -481,9 +562,11 @@ export async function connectBrowserVoiceSession(
   const wireBinaryChannel = (
     channel: RTCDataChannel,
     kind: DataChannelKind,
+    isChannelCurrent: () => boolean,
   ) => {
     channel.binaryType = "arraybuffer";
     channel.onmessage = (event) => {
+      if (!isChannelCurrent()) return;
       if (typeof event.data === "string") {
         if (kind === "control") {
           handleControlJson(String(event.data));
@@ -520,24 +603,26 @@ export async function connectBrowserVoiceSession(
     debug?.info("voice", "mic_granted");
   }
 
-  let ignorePeerConnectionClose = false;
-
-  const resetPeerConnection = (options?: {
+  /**
+   * Retire the current PC with the awaitable close barrier.
+   * Callers that will create a replacement must abort when status is not `closed`.
+   * On timed_out/failed, quarantine and block all future replacements.
+   */
+  const retirePeerConnection = async (retireOptions?: {
     preserveConnectedWait?: boolean;
-  }): void => {
+  }): Promise<PeerCloseResult> => {
+    if (replacementBlockedResult) {
+      return replacementBlockedResult;
+    }
     stopMicPump?.();
     stopMicPump = null;
     controlChannel = null;
     syncChannel = null;
-    if (pc) {
-      ignorePeerConnectionClose = true;
-      pc.close();
-      ignorePeerConnectionClose = false;
-    }
-    pc = null;
-    pendingIce.length = 0;
+    const localPc = pc;
+    activePcGeneration = 0;
+    clearPendingIceGenerations();
     connectionState = "new";
-    if (!options?.preserveConnectedWait) {
+    if (!retireOptions?.preserveConnectedWait) {
       connectedPromise = null;
       resolveConnected = null;
       rejectConnected = null;
@@ -550,6 +635,26 @@ export async function connectBrowserVoiceSession(
       controlChannelOpen: false,
       syncChannelOpen: false,
     });
+    if (!localPc) {
+      return {
+        status: "closed",
+        mode: "sync",
+        durationMs: 0,
+        timedOut: false,
+      };
+    }
+    intentionallyRetiringPcs.add(localPc);
+    // Detach from live slot before awaiting close so handlers see identity change.
+    pc = null;
+    const closeResult = await closePeerConnectionAwaitable(localPc);
+    if (closeResult.status !== "closed") {
+      // Never invent closed later — retain unsafe PC, block replacement forever.
+      replacementBlockedResult = closeResult;
+      quarantinedPc = localPc;
+      terminalDisconnectResult = closeResult;
+      return closeResult;
+    }
+    return closeResult;
   };
 
   const bindDataChannel = (
@@ -558,17 +663,23 @@ export async function connectBrowserVoiceSession(
       kind: DataChannelKind;
       label: string;
       openField: "controlChannelOpen" | "syncChannelOpen";
+      getAssigned: () => RTCDataChannel | null;
       assign: (next: RTCDataChannel | null) => void;
       onOpen?: (channel: RTCDataChannel) => void;
     },
+    isPcCurrent: () => boolean,
   ): void => {
     binding.assign(channel);
+    const isChannelCurrent = (): boolean =>
+      isPcCurrent() && binding.getAssigned() === channel;
 
     const markOpen = () => {
+      if (!isChannelCurrent()) return;
       updateConnectionSnapshot({ [binding.openField]: true });
     };
 
     channel.onopen = () => {
+      if (!isChannelCurrent()) return;
       debug?.info("dc", "open", binding.label);
       markOpen();
       binding.onOpen?.(channel);
@@ -576,46 +687,68 @@ export async function connectBrowserVoiceSession(
     if (channel.readyState === "open") markOpen();
 
     channel.onclose = () => {
+      if (!isChannelCurrent()) return;
       debug?.info("dc", "close", binding.label);
       binding.assign(null);
       updateConnectionSnapshot({ [binding.openField]: false });
     };
 
-    wireBinaryChannel(channel, binding.kind);
+    channel.onerror = () => {
+      if (!isChannelCurrent()) return;
+      debug?.warn("dc", "error", binding.label);
+    };
+
+    wireBinaryChannel(channel, binding.kind, isChannelCurrent);
   };
 
-  const wireControl = (channel: RTCDataChannel) => {
-    bindDataChannel(channel, {
-      kind: "control",
-      label: VOICE_CONTROL_CHANNEL_LABEL,
-      openField: "controlChannelOpen",
-      assign: (next) => {
-        controlChannel = next;
+  const wireControl = (
+    channel: RTCDataChannel,
+    isPcCurrent: () => boolean,
+  ) => {
+    bindDataChannel(
+      channel,
+      {
+        kind: "control",
+        label: VOICE_CONTROL_CHANNEL_LABEL,
+        openField: "controlChannelOpen",
+        getAssigned: () => controlChannel,
+        assign: (next) => {
+          controlChannel = next;
+        },
+        onOpen: (openChannel) => {
+          if (!options.customerContext) return;
+          openChannel.send(
+            JSON.stringify({
+              type: "session_hello",
+              customer_context: options.customerContext,
+            }),
+          );
+        },
       },
-      onOpen: (openChannel) => {
-        if (!options.customerContext) return;
-        openChannel.send(
-          JSON.stringify({
-            type: "session_hello",
-            customer_context: options.customerContext,
-          }),
-        );
-      },
-    });
+      isPcCurrent,
+    );
   };
 
-  const wireSync = (channel: RTCDataChannel) => {
-    bindDataChannel(channel, {
-      kind: "sync",
-      label: VOICE_SYNC_CHANNEL_LABEL,
-      openField: "syncChannelOpen",
-      assign: (next) => {
-        syncChannel = next;
+  const wireSync = (channel: RTCDataChannel, isPcCurrent: () => boolean) => {
+    bindDataChannel(
+      channel,
+      {
+        kind: "sync",
+        label: VOICE_SYNC_CHANNEL_LABEL,
+        openField: "syncChannelOpen",
+        getAssigned: () => syncChannel,
+        assign: (next) => {
+          syncChannel = next;
+        },
       },
-    });
+      isPcCurrent,
+    );
   };
 
-  const onServerOffer = async (sdp: RTCSessionDescriptionInit) => {
+  const onServerOffer = async (
+    sdp: RTCSessionDescriptionInit,
+    offerGeneration: number,
+  ) => {
     let step = "reset_peer_connection";
     const startedAtMs = Date.now();
     const logOfferStep = (name: string): void => {
@@ -625,38 +758,60 @@ export async function connectBrowserVoiceSession(
         `${name} elapsed_ms=${Date.now() - startedAtMs}`,
       );
     };
+    const isOfferCurrent = (): boolean =>
+      offerGeneration === negotiationGeneration && !gracefulDisconnect;
 
     try {
+      if (!isOfferCurrent()) return;
+      assertReplacementAllowed();
+
       if (pc) {
-        ignorePeerConnectionClose = true;
-        pc.close();
-        ignorePeerConnectionClose = false;
-        pc = null;
-        pendingIce.length = 0;
-        controlChannel = null;
-        syncChannel = null;
-        connectionState = "new";
-        updateConnectionSnapshot({
-          peerConnectionState: "new",
-          inboundAudioTrack: false,
-          outboundAudioTrack: false,
-          controlChannelOpen: false,
-          syncChannelOpen: false,
+        step = "await_previous_peer_close";
+        const closeResult = await retirePeerConnection({
+          preserveConnectedWait: true,
         });
+        emitDiagnosticSafely(options.onDiagnosticEvent, {
+          type: "peer_close",
+          status: closeResult.status,
+          mode: closeResult.mode,
+          durationMs: closeResult.durationMs,
+          timedOut: closeResult.timedOut,
+          context: "offer_replace",
+          ...(closeResult.error !== undefined
+            ? { error: redactDiagnosticDetail(closeResult.error) }
+            : {}),
+        });
+        if (!isOfferCurrent()) return;
+        if (closeResult.status !== "closed") {
+          throw new Error(
+            `cannot replace peer connection: previous close ${closeResult.status}`,
+          );
+        }
       }
       logOfferStep(step);
+      assertReplacementAllowed();
 
       step = "create_peer_connection";
       ensureConnectedPromise();
-      pc = new runtime.RTCPeerConnection({
+      const localPc = new runtime.RTCPeerConnection({
         iceServers,
         ...(options.iceTransportPolicy
           ? { iceTransportPolicy: options.iceTransportPolicy }
           : {}),
       });
+      pc = localPc;
+      activePcGeneration = offerGeneration;
+      const boundGeneration = offerGeneration;
+      const isPcCurrent = (): boolean =>
+        pc === localPc &&
+        activePcGeneration === boundGeneration &&
+        offerGeneration === negotiationGeneration &&
+        !gracefulDisconnect &&
+        !replacementBlockedResult;
       logOfferStep(step);
 
-      pc.ontrack = (event) => {
+      localPc.ontrack = (event) => {
+        if (!isPcCurrent()) return;
         if (event.track.kind !== "audio") return;
         const stream = event.streams[0] ?? new MediaStream([event.track]);
         if (options.audioElement) {
@@ -668,15 +823,17 @@ export async function connectBrowserVoiceSession(
         debug?.info("webrtc", "agent_audio_track");
       };
 
-      pc.ondatachannel = (event) => {
+      localPc.ondatachannel = (event) => {
+        if (!isPcCurrent()) return;
         if (event.channel.label === VOICE_CONTROL_CHANNEL_LABEL) {
-          wireControl(event.channel);
+          wireControl(event.channel, isPcCurrent);
         } else if (event.channel.label === VOICE_SYNC_CHANNEL_LABEL) {
-          wireSync(event.channel);
+          wireSync(event.channel, isPcCurrent);
         }
       };
 
-      pc.onicecandidate = (event) => {
+      localPc.onicecandidate = (event) => {
+        if (!isPcCurrent()) return;
         if (event.candidate) {
           sendToServer({
             type: "ice-candidate",
@@ -686,26 +843,35 @@ export async function connectBrowserVoiceSession(
         }
       };
 
-      pc.onconnectionstatechange = () => {
-        connectionState = pc?.connectionState ?? "new";
+      localPc.onconnectionstatechange = () => {
+        const intentionalRetire = intentionallyRetiringPcs.has(localPc);
+        // Per-PC identity: never let a retired/stale PC mutate live globals.
+        if (pc !== localPc) {
+          return;
+        }
+        if (!isPcCurrent() && !intentionalRetire) return;
+        connectionState = localPc.connectionState ?? "new";
         debug?.info("webrtc", "connection_state", connectionState);
         updateConnectionSnapshot({ peerConnectionState: connectionState });
         if (connectionState === "connected") {
+          if (!isPcCurrent()) return;
           autoReconnectAttempts = 0;
           stopMicPump?.();
           stopMicPump = null;
           if (micStream && (options.micPump ?? "silent") === "silent") {
             stopMicPump = createMicPump(
               micStream,
-              () => pc?.connectionState === "connected",
+              () =>
+                pc === localPc && localPc.connectionState === "connected",
               debug,
             );
           }
           syncOutboundAudioTrack();
         } else if (connectionState === "failed") {
+          if (!isPcCurrent()) return;
           handleTransportFailure("failed", "webrtc_failed");
         } else if (connectionState === "closed") {
-          if (ignorePeerConnectionClose || gracefulDisconnect) {
+          if (intentionalRetire || gracefulDisconnect) {
             if (gracefulDisconnect) {
               rejectConnectedWait(
                 new Error(`peer connection ${connectionState}`),
@@ -714,29 +880,33 @@ export async function connectBrowserVoiceSession(
             }
             return;
           }
+          if (!isPcCurrent()) return;
           handleTransportFailure("closed", "webrtc_closed");
         }
       };
 
-      pc.oniceconnectionstatechange = () => {
+      localPc.oniceconnectionstatechange = () => {
+        if (!isPcCurrent()) return;
         debug?.info(
           "webrtc",
           "ice_connection_state",
-          pc?.iceConnectionState ?? "unknown",
+          localPc.iceConnectionState ?? "unknown",
         );
       };
 
-      pc.onicegatheringstatechange = () => {
+      localPc.onicegatheringstatechange = () => {
+        if (!isPcCurrent()) return;
         debug?.info(
           "webrtc",
           "ice_gathering_state",
-          pc?.iceGatheringState ?? "unknown",
+          localPc.iceGatheringState ?? "unknown",
         );
       };
 
       if (micStream) {
         step = "attach_mic";
-        await attachMicTracks(pc, micStream);
+        await attachMicTracks(localPc, micStream);
+        if (!isPcCurrent()) return;
         syncOutboundAudioTrack();
         if ((options.micPump ?? "silent") === "external") {
           for (const track of micStream.getAudioTracks()) {
@@ -752,41 +922,47 @@ export async function connectBrowserVoiceSession(
       }
 
       step = "set_remote_description";
+      if (!isOfferCurrent() || !isPcCurrent()) return;
       if (!remoteOfferHasIceUfrag(sdp)) {
         throw new Error(
           "set_remote_description called with no ice-ufrag (remote offer missing a=ice-ufrag)",
         );
       }
-      await pc.setRemoteDescription(sdp);
+      await localPc.setRemoteDescription(sdp);
+      if (!isOfferCurrent() || !isPcCurrent()) return;
       logOfferStep(step);
 
       step = "drain_pending_ice";
-      for (const candidate of pendingIce.splice(0)) {
-        await pc.addIceCandidate(candidate);
-      }
+      if (!isOfferCurrent() || !isPcCurrent()) return;
+      await drainPendingIce(localPc, offerGeneration);
       logOfferStep(step);
 
       step = "create_answer";
-      const answer = await pc.createAnswer();
+      if (!isOfferCurrent() || !isPcCurrent()) return;
+      const answer = await localPc.createAnswer();
+      if (!isOfferCurrent() || !isPcCurrent()) return;
       logOfferStep(step);
 
       step = "set_local_description";
-      await pc.setLocalDescription(answer);
+      await localPc.setLocalDescription(answer);
+      if (!isOfferCurrent() || !isPcCurrent()) return;
       logOfferStep(step);
 
       step = "wait_ice_gathering";
-      await waitForIceGatheringComplete(pc);
+      await waitForIceGatheringComplete(localPc);
+      if (!isOfferCurrent() || !isPcCurrent()) return;
       logOfferStep(step);
 
       step = "send_answer";
       sendToServer({
         type: "answer",
         targetPeerId: VOICE_AGENT_SERVER_PEER_ID,
-        sdp: pc.localDescription,
+        sdp: localPc.localDescription,
       });
       debug?.info("signaling", "answer_sent");
       logOfferStep(step);
     } catch (error: unknown) {
+      if (!isOfferCurrent()) return;
       const detail = error instanceof Error ? error.message : String(error);
       const message = `WebRTC offer handler failed at ${step}: ${detail}`;
       debug?.error(
@@ -813,6 +989,25 @@ export async function connectBrowserVoiceSession(
     }
   };
 
+  /** One active negotiation at a time; newer offers supersede older generations. */
+  const enqueueServerOffer = (sdp: RTCSessionDescriptionInit): void => {
+    if (replacementBlockedResult) {
+      debug?.warn(
+        "signaling",
+        "offer_ignored_replacement_blocked",
+        replacementBlockedResult.status,
+      );
+      return;
+    }
+    const offerGeneration = ++negotiationGeneration;
+    // Drop ICE buckets from prior generations; keep current gen for early candidates.
+    clearPendingIceGenerations(offerGeneration);
+    offerChain = offerChain
+      .catch(() => undefined)
+      .then(() => onServerOffer(sdp, offerGeneration));
+    void offerChain.catch(() => undefined);
+  };
+
   const scheduleAutoReconnect = (reason: string): void => {
     if (gracefulDisconnect || reconnectPolicy === "new-session") return;
     if (autoReconnectAttempts >= maxAutoReconnectAttempts) {
@@ -835,9 +1030,12 @@ export async function connectBrowserVoiceSession(
     }, delayMs);
   };
 
-  const attachWsMessageHandler = (): void => {
-    if (!ws) return;
-    ws.onmessage = (event) => {
+  const attachWsHandlers = (localWs: WebSocket, boundEpoch: number): void => {
+    const isCurrentWs = (): boolean =>
+      ws === localWs && boundEpoch === signalingEpoch && !gracefulDisconnect;
+
+    localWs.onmessage = (event) => {
+      if (!isCurrentWs()) return;
       const message = JSON.parse(String(event.data)) as {
         type: string;
         peerId?: string;
@@ -848,19 +1046,35 @@ export async function connectBrowserVoiceSession(
       switch (message.type) {
         case "offer":
           if (message.peerId === VOICE_AGENT_SERVER_PEER_ID && message.sdp) {
-            void onServerOffer(message.sdp);
+            enqueueServerOffer(message.sdp);
           }
           break;
         case "ice-candidate":
           if (
             message.peerId === VOICE_AGENT_SERVER_PEER_ID &&
             message.candidate &&
-            pc
+            !gracefulDisconnect
           ) {
-            if (!pc.remoteDescription) {
-              pendingIce.push(message.candidate);
+            // Attribute to the latest negotiation generation (offer may already
+            // be enqueued while PC is still null on the offerChain).
+            const iceGeneration = negotiationGeneration;
+            if (iceGeneration === 0) break;
+            const targetPc = pc;
+            if (
+              targetPc &&
+              activePcGeneration === iceGeneration &&
+              pc === targetPc
+            ) {
+              if (!targetPc.remoteDescription) {
+                queuePendingIce(iceGeneration, message.candidate);
+              } else {
+                void targetPc.addIceCandidate(message.candidate).catch(() => {
+                  /* ignore stale/failed ICE on captured PC */
+                });
+              }
             } else {
-              void pc.addIceCandidate(message.candidate);
+              // PC not yet materialized for this generation — queue for drain.
+              queuePendingIce(iceGeneration, message.candidate);
             }
           }
           break;
@@ -868,28 +1082,92 @@ export async function connectBrowserVoiceSession(
           break;
       }
     };
+
+    localWs.onclose = () => {
+      if (!isCurrentWs()) return;
+      if (gracefulDisconnect || reconnectPolicy === "new-session") return;
+      scheduleAutoReconnect("signaling_closed");
+    };
   };
 
-  const joinSignalingRoom = async (isReconnect: boolean): Promise<void> => {
+  const joinSignalingRoom = async (
+    isReconnect: boolean,
+    boundEpoch: number,
+  ): Promise<void> => {
     if (isReconnect) {
-      resetPeerConnection({ preserveConnectedWait: true });
-      if (ws) {
-        ws.onclose = null;
-        ws.close();
-        ws = null;
+      assertReplacementAllowed();
+      const closeResult = await retirePeerConnection({
+        preserveConnectedWait: true,
+      });
+      emitDiagnosticSafely(options.onDiagnosticEvent, {
+        type: "peer_close",
+        status: closeResult.status,
+        mode: closeResult.mode,
+        durationMs: closeResult.durationMs,
+        timedOut: closeResult.timedOut,
+        context: "reconnect",
+        ...(closeResult.error !== undefined
+          ? { error: redactDiagnosticDetail(closeResult.error) }
+          : {}),
+      });
+      if (closeResult.status !== "closed") {
+        throw new Error(
+          `reconnect blocked: peer close ${closeResult.status}`,
+        );
+      }
+      if (boundEpoch !== signalingEpoch) {
+        return;
+      }
+      const previousWs = ws;
+      if (previousWs) {
+        previousWs.onclose = null;
+        previousWs.onmessage = null;
+        previousWs.onerror = null;
+        try {
+          previousWs.close();
+        } catch {
+          /* ignore */
+        }
+        if (ws === previousWs) {
+          ws = null;
+        }
       }
     }
-    ws = new runtime.WebSocket(signalingUrl);
+
+    if (boundEpoch !== signalingEpoch) {
+      return;
+    }
+    assertReplacementAllowed();
+
+    const nextWs = new runtime.WebSocket(signalingUrl);
+    if (boundEpoch !== signalingEpoch) {
+      try {
+        nextWs.close();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    ws = nextWs;
+
     await new Promise<void>((resolve, reject) => {
-      if (!ws) return reject(new Error("WebSocket missing"));
-      ws.onopen = () => {
+      nextWs.onopen = () => {
+        if (ws !== nextWs || boundEpoch !== signalingEpoch) {
+          reject(new Error("WebSocket superseded during reconnect"));
+          return;
+        }
+        // sendSignal uses global ws — only send when this socket is current.
         sendSignal({ type: "join", room: roomId, peerId });
         debug?.info("signaling", "join_sent", `room=${roomId} peer=${peerId}`);
         debug?.info("signaling", isReconnect ? "rejoined" : "joined", roomId);
         updateConnectionSnapshot({ signalingJoined: true });
         resolve();
       };
-      ws.onerror = () => {
+      nextWs.onerror = () => {
+        if (ws !== nextWs || boundEpoch !== signalingEpoch) {
+          reject(new Error("WebSocket superseded during reconnect"));
+          return;
+        }
         dispatchConnectionError(
           createConnectionError("WebSocket error", {
             subsystem: "webrtc",
@@ -907,21 +1185,78 @@ export async function connectBrowserVoiceSession(
         reject(new Error("WebSocket error"));
       };
     });
-    attachWsMessageHandler();
-    ws.onclose = () => {
-      if (gracefulDisconnect || reconnectPolicy === "new-session") return;
-      scheduleAutoReconnect("signaling_closed");
-    };
+    if (boundEpoch !== signalingEpoch) {
+      if (ws === nextWs) {
+        nextWs.onclose = null;
+        nextWs.onmessage = null;
+        try {
+          nextWs.close();
+        } catch {
+          /* ignore */
+        }
+        ws = null;
+      }
+      return;
+    }
+    attachWsHandlers(nextWs, boundEpoch);
     if (isReconnect) {
       debug?.info("session", "same_session_reconnect", orchestratorSessionId);
     }
   };
 
-  const reconnectSignaling = async (): Promise<void> => {
-    await joinSignalingRoom(true);
+  const reconnectSignaling = (): Promise<void> => {
+    if (gracefulDisconnect) {
+      return Promise.resolve();
+    }
+    if (replacementBlockedResult) {
+      return Promise.reject(
+        new Error(
+          `reconnect blocked: previous close ${replacementBlockedResult.status}`,
+        ),
+      );
+    }
+    // True single-flight: all concurrent callers share one flight.
+    if (reconnectFlight) {
+      return reconnectFlight;
+    }
+    const epoch = ++signalingEpoch;
+    const flight = joinSignalingRoom(true, epoch).finally(() => {
+      if (reconnectFlight === flight) {
+        reconnectFlight = null;
+      }
+    });
+    reconnectFlight = flight;
+    return flight;
   };
 
-  await joinSignalingRoom(false);
+  const cleanupFailedInitialJoin = (): void => {
+    const localWs = ws;
+    ws = null;
+    if (localWs) {
+      localWs.onclose = null;
+      localWs.onmessage = null;
+      localWs.onerror = null;
+      try {
+        localWs.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    const localMic = micStream;
+    micStream = null;
+    localMic?.getTracks().forEach((track) => track.stop());
+    updateConnectionSnapshot({
+      signalingJoined: false,
+      outboundAudioTrack: false,
+    });
+  };
+
+  try {
+    await joinSignalingRoom(false, signalingEpoch);
+  } catch (error) {
+    cleanupFailedInitialJoin();
+    throw error;
+  }
   publishConnectionStatus();
 
   const requireOpenControl = (): RTCDataChannel => {
@@ -964,9 +1299,15 @@ export async function connectBrowserVoiceSession(
     };
 
     while (true) {
-      if (isWebRtcConnectionReady(connectionSnapshot, readinessProfile)) return;
+      if (isWebRtcConnectionReady(connectionSnapshot, readinessProfile)) {
+        clearConnectedWait();
+        return;
+      }
       if (pendingConnectFailure) {
         throw pendingConnectFailure;
+      }
+      if (gracefulDisconnect) {
+        throw new Error("disconnected");
       }
 
       const remainingMs = deadlineMs - Date.now();
@@ -975,11 +1316,12 @@ export async function connectBrowserVoiceSession(
       }
 
       const waitPromise = ensureConnectedPromise();
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([
           waitPromise,
           new Promise<void>((_, reject) => {
-            setTimeout(() => {
+            timer = setTimeout(() => {
               reject(new Error("__wait_for_connected_timeout__"));
             }, remainingMs);
           }),
@@ -1000,9 +1342,15 @@ export async function connectBrowserVoiceSession(
           continue;
         }
         throw error;
+      } finally {
+        // Success, retry, and disconnect paths must not leave a live timer.
+        if (timer) clearTimeout(timer);
       }
 
-      if (isWebRtcConnectionReady(connectionSnapshot, readinessProfile)) return;
+      if (isWebRtcConnectionReady(connectionSnapshot, readinessProfile)) {
+        clearConnectedWait();
+        return;
+      }
     }
   };
 
@@ -1063,18 +1411,30 @@ export async function connectBrowserVoiceSession(
     disconnect: () => {
       // Sync terminal invalidation — must not await native close (reconnect opens WS promptly).
       gracefulDisconnect = true;
+      negotiationGeneration += 1;
+      activePcGeneration = 0;
+      clearPendingIceGenerations();
+      // Invalidate in-flight reconnect WS handlers / epoch.
+      signalingEpoch += 1;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       reconnectTimer = undefined;
       stopMicPump?.();
       stopMicPump = null;
+      rejectConnected?.(new Error("disconnected"));
+      clearConnectedWait();
+      pendingConnectFailure = null;
+
+      const asyncOwnsPeerClose = disconnectAsyncInFlight !== null;
       const localControl = controlChannel;
       const localSync = syncChannel;
-      const localPc = pc;
+      const localPc = asyncOwnsPeerClose ? null : pc;
       const localWs = ws;
       const localMic = micStream;
       controlChannel = null;
       syncChannel = null;
-      pc = null;
+      if (!asyncOwnsPeerClose) {
+        pc = null;
+      }
       ws = null;
       micStream = null;
       try {
@@ -1097,10 +1457,27 @@ export async function connectBrowserVoiceSession(
           /* ignore */
         }
       }
-      try {
-        localPc?.close();
-      } catch {
-        /* ignore */
+      // Do not sync-close while disconnectAsync owns native close — that masks
+      // timed_out/failed outcomes from soak callers awaiting the async barrier.
+      // Also do not sync-close a quarantined PC (native close already timed out).
+      if (localPc && localPc !== quarantinedPc) {
+        intentionallyRetiringPcs.add(localPc);
+        try {
+          localPc.close();
+        } catch {
+          /* ignore */
+        }
+      }
+      // If sync disconnect wins on an async-capable runtime, record an explicit
+      // sync terminal outcome — later disconnectAsync must not claim async close.
+      // Prefer retained replacement-blocked failure over inventing closed.
+      if (!asyncOwnsPeerClose && !terminalDisconnectResult) {
+        terminalDisconnectResult = replacementBlockedResult ?? {
+          status: "closed",
+          mode: "sync",
+          durationMs: 0,
+          timedOut: false,
+        };
       }
       localMic?.getTracks().forEach((track) => track.stop());
       updateConnectionSnapshot({
@@ -1114,66 +1491,113 @@ export async function connectBrowserVoiceSession(
       debug?.info("session", "disconnected");
     },
     disconnectAsync: async () => {
-      gracefulDisconnect = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      reconnectTimer = undefined;
-      stopMicPump?.();
-      stopMicPump = null;
-
-      const localControl = controlChannel;
-      const localSync = syncChannel;
-      const localPc = pc;
-      const localWs = ws;
-      const localMic = micStream;
-      controlChannel = null;
-      syncChannel = null;
-      pc = null;
-      ws = null;
-      micStream = null;
-
-      try {
-        localControl?.close();
-      } catch {
-        /* ignore */
+      if (terminalDisconnectResult) {
+        return terminalDisconnectResult;
       }
-      try {
-        localSync?.close();
-      } catch {
-        /* ignore */
+      if (replacementBlockedResult) {
+        // Unsafe old PC already retired/quarantined — surface that strict failure.
+        terminalDisconnectResult = replacementBlockedResult;
+        return replacementBlockedResult;
       }
-      if (localWs) {
-        localWs.onclose = null;
-        localWs.onmessage = null;
-        localWs.onerror = null;
+      if (disconnectAsyncInFlight) {
+        return disconnectAsyncInFlight;
+      }
+
+      disconnectAsyncInFlight = (async (): Promise<PeerCloseResult> => {
+        gracefulDisconnect = true;
+        negotiationGeneration += 1;
+        activePcGeneration = 0;
+        clearPendingIceGenerations();
+        signalingEpoch += 1;
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = undefined;
+        stopMicPump?.();
+        stopMicPump = null;
+        rejectConnected?.(new Error("disconnected"));
+        clearConnectedWait();
+        pendingConnectFailure = null;
+
+        const localControl = controlChannel;
+        const localSync = syncChannel;
+        const localPc = pc;
+        const localWs = ws;
+        const localMic = micStream;
+        controlChannel = null;
+        syncChannel = null;
+        pc = null;
+        ws = null;
+        micStream = null;
+
         try {
-          localWs.close();
+          localControl?.close();
         } catch {
           /* ignore */
         }
+        try {
+          localSync?.close();
+        } catch {
+          /* ignore */
+        }
+        if (localWs) {
+          localWs.onclose = null;
+          localWs.onmessage = null;
+          localWs.onerror = null;
+          try {
+            localWs.close();
+          } catch {
+            /* ignore */
+          }
+        }
+        localMic?.getTracks().forEach((track) => track.stop());
+
+        // Never retry native close on a quarantined PC after timed_out/failed.
+        const closeTarget =
+          localPc && localPc !== quarantinedPc ? localPc : null;
+        if (closeTarget) {
+          intentionallyRetiringPcs.add(closeTarget);
+        }
+        const closeResult = closeTarget
+          ? await closePeerConnectionAwaitable(closeTarget)
+          : (replacementBlockedResult ?? {
+              status: "closed" as const,
+              mode: "sync" as const,
+              durationMs: 0,
+              timedOut: false,
+            });
+        terminalDisconnectResult = closeResult;
+        emitDiagnosticSafely(options.onDiagnosticEvent, {
+          type: "peer_close",
+          status: closeResult.status,
+          mode: closeResult.mode,
+          durationMs: closeResult.durationMs,
+          timedOut: closeResult.timedOut,
+          context: "disconnect",
+          ...(closeResult.error !== undefined
+            ? { error: redactDiagnosticDetail(closeResult.error) }
+            : {}),
+        });
+
+        updateConnectionSnapshot({
+          signalingJoined: false,
+          peerConnectionState: "closed",
+          inboundAudioTrack: false,
+          outboundAudioTrack: false,
+          controlChannelOpen: false,
+          syncChannelOpen: false,
+        });
+        debug?.info(
+          "session",
+          "disconnected",
+          `peer_close=${closeResult.status}`,
+        );
+        return closeResult;
+      })();
+
+      try {
+        return await disconnectAsyncInFlight;
+      } finally {
+        disconnectAsyncInFlight = null;
       }
-      localMic?.getTracks().forEach((track) => track.stop());
-
-      const closeResult = await closePeerConnectionAwaitable(localPc);
-      emitDiagnosticSafely(options.onDiagnosticEvent, {
-        type: "peer_close",
-        mode: closeResult.mode,
-        durationMs: closeResult.durationMs,
-        timedOut: closeResult.timedOut,
-        context: "disconnect",
-        ...(closeResult.error !== undefined
-          ? { error: redactDiagnosticDetail(closeResult.error) }
-          : {}),
-      });
-
-      updateConnectionSnapshot({
-        signalingJoined: false,
-        peerConnectionState: "closed",
-        inboundAudioTrack: false,
-        outboundAudioTrack: false,
-        controlChannelOpen: false,
-        syncChannelOpen: false,
-      });
-      debug?.info("session", "disconnected");
     },
   };
 }

@@ -36,6 +36,8 @@ class MockWebSocket {
 class MockPeerConnection {
   static instances: MockPeerConnection[] = [];
   static createAnswerError: Error | null = null;
+  static createAnswerGate: Promise<void> | null = null;
+  static createAnswerCalls = 0;
 
   localDescription: RTCSessionDescriptionInit | null = null;
   remoteDescription: RTCSessionDescriptionInit | null = null;
@@ -62,6 +64,10 @@ class MockPeerConnection {
   async addIceCandidate(_candidate: RTCIceCandidateInit): Promise<void> {}
 
   async createAnswer(): Promise<RTCSessionDescriptionInit> {
+    MockPeerConnection.createAnswerCalls += 1;
+    if (MockPeerConnection.createAnswerGate) {
+      await MockPeerConnection.createAnswerGate;
+    }
     if (MockPeerConnection.createAnswerError) {
       throw MockPeerConnection.createAnswerError;
     }
@@ -124,6 +130,8 @@ describe("connectBrowserVoiceSession offer handler", () => {
     MockWebSocket.instances = [];
     MockPeerConnection.instances = [];
     MockPeerConnection.createAnswerError = null;
+    MockPeerConnection.createAnswerGate = null;
+    MockPeerConnection.createAnswerCalls = 0;
   });
 
   afterEach(() => {
@@ -195,7 +203,11 @@ describe("connectBrowserVoiceSession offer handler", () => {
         sdp: { type: "offer", sdp: "v=0\r\n" },
       }),
     });
-    await Promise.resolve();
+    // Serialized offer chain + async handler — flush microtasks.
+    for (let i = 0; i < 10; i += 1) {
+      await Promise.resolve();
+      if (sessionErrors.length > 0) break;
+    }
 
     expect(sessionErrors).toHaveLength(1);
     expect(sessionErrors[0]?.code).toBe("WEBRTC_SDP_NEGOTIATION_FAILED");
@@ -209,5 +221,86 @@ describe("connectBrowserVoiceSession offer handler", () => {
 
     vi.useRealTimers();
     session.disconnect();
+  });
+
+  it("serializes overlapping offers so only the latest generation sends an answer", async () => {
+    let releaseFirst: (() => void) | undefined;
+    MockPeerConnection.createAnswerGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const session = await connectBrowserVoiceSession({
+      credentials: {
+        ...baseCredentials,
+        session_id: "session-overlap-offer",
+        room_id: "room-overlap-offer",
+      },
+      requestMic: false,
+      readiness: "data",
+      runtime: mockRuntime(),
+      reconnectPolicy: "new-session",
+    });
+
+    const ws = MockWebSocket.instances[0]!;
+    const offer = {
+      type: "offer",
+      peerId: VOICE_AGENT_SERVER_PEER_ID,
+      sdp: { type: "offer", sdp: "v=0\r\na=ice-ufrag:server\r\n" },
+    };
+    ws.onmessage?.({ data: JSON.stringify(offer) });
+    await Promise.resolve();
+    // Second offer supersedes the first while createAnswer is gated.
+    MockPeerConnection.createAnswerGate = null;
+    ws.onmessage?.({ data: JSON.stringify(offer) });
+    await Promise.resolve();
+    releaseFirst?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const answers = ws.sent.filter((frame) => {
+      try {
+        return JSON.parse(frame).type === "answer";
+      } catch {
+        return false;
+      }
+    });
+    expect(answers.length).toBe(1);
+    expect(MockPeerConnection.createAnswerCalls).toBeGreaterThanOrEqual(1);
+    session.disconnect();
+  });
+
+  it("disconnect during offer prevents a late answer from resurrecting", async () => {
+    let releaseAnswer: (() => void) | undefined;
+    MockPeerConnection.createAnswerGate = new Promise<void>((resolve) => {
+      releaseAnswer = resolve;
+    });
+
+    const session = await connectBrowserVoiceSession({
+      credentials: {
+        ...baseCredentials,
+        session_id: "session-disconnect-offer",
+        room_id: "room-disconnect-offer",
+      },
+      requestMic: false,
+      readiness: "data",
+      runtime: mockRuntime(),
+      reconnectPolicy: "new-session",
+    });
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.onmessage?.({
+      data: JSON.stringify({
+        type: "offer",
+        peerId: VOICE_AGENT_SERVER_PEER_ID,
+        sdp: { type: "offer", sdp: "v=0\r\na=ice-ufrag:server\r\n" },
+      }),
+    });
+    await Promise.resolve();
+    session.disconnect();
+    releaseAnswer?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(ws.sent.some((frame) => JSON.parse(frame).type === "answer")).toBe(
+      false,
+    );
   });
 });
