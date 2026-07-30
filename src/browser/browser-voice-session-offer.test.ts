@@ -223,6 +223,47 @@ describe("connectBrowserVoiceSession offer handler", () => {
     session.disconnect();
   });
 
+  it("sends answer without waiting for ICE gathering complete", async () => {
+    const session = await connectBrowserVoiceSession({
+      credentials: baseCredentials,
+      requestMic: false,
+      readiness: "data",
+      runtime: mockRuntime(),
+      reconnectPolicy: "new-session",
+    });
+
+    const ws = MockWebSocket.instances[0];
+    // Keep gathering incomplete after setLocalDescription — old code blocked answer.
+    const originalSetLocal = MockPeerConnection.prototype.setLocalDescription;
+    MockPeerConnection.prototype.setLocalDescription = async function (
+      description: RTCSessionDescriptionInit,
+    ) {
+      this.localDescription = description;
+      this.iceGatheringState = "gathering";
+      // do not fire complete
+    };
+
+    try {
+      ws.onmessage?.({
+        data: JSON.stringify({
+          type: "offer",
+          peerId: VOICE_AGENT_SERVER_PEER_ID,
+          sdp: { type: "offer", sdp: "v=0\r\na=ice-ufrag:server\r\n" },
+        }),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(ws.sent.some((frame) => JSON.parse(frame).type === "answer")).toBe(
+        true,
+      );
+      const pc = MockPeerConnection.instances[0];
+      expect(pc.iceGatheringState).toBe("gathering");
+    } finally {
+      MockPeerConnection.prototype.setLocalDescription = originalSetLocal;
+      session.disconnect();
+    }
+  });
+
   it("serializes overlapping offers so only the latest generation sends an answer", async () => {
     let releaseFirst: (() => void) | undefined;
     MockPeerConnection.createAnswerGate = new Promise<void>((resolve) => {

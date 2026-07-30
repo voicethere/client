@@ -1,5 +1,8 @@
 export type WebRtcReadinessProfile = "voice" | "data" | "voice_and_data";
 
+/** Post-ICE stuck budget for voice / voice+data (capped by overall connect timeout). */
+export const DEFAULT_HALF_OPEN_FAIL_FAST_MS = 20_000;
+
 export type WebRtcConnectionPhase =
   | "signaling"
   | "negotiating"
@@ -68,10 +71,8 @@ export function deriveWebRtcConnectionPhase(
 
   if (snapshot.peerConnectionState !== "connected") return "connecting";
 
-  const needsMedia =
-    profile === "voice" || profile === "voice_and_data";
-  const needsChannels =
-    profile === "data" || profile === "voice_and_data";
+  const needsMedia = profile === "voice" || profile === "voice_and_data";
+  const needsChannels = profile === "data" || profile === "voice_and_data";
 
   if (needsMedia && !voiceMediaReady(snapshot)) return "awaiting_media";
   if (needsChannels && !dataChannelsReady(snapshot)) {
@@ -86,6 +87,45 @@ export function buildWebRtcConnectionStatus(
   profile: WebRtcReadinessProfile,
 ): WebRtcConnectionStatus {
   const ready = isWebRtcConnectionReady(snapshot, profile);
-  const phase = ready ? "ready" : deriveWebRtcConnectionPhase(snapshot, profile);
+  const phase = ready
+    ? "ready"
+    : deriveWebRtcConnectionPhase(snapshot, profile);
   return { ...snapshot, phase, ready };
+}
+
+export function usesHalfOpenFailFast(profile: WebRtcReadinessProfile): boolean {
+  return profile === "voice" || profile === "voice_and_data";
+}
+
+export function resolveHalfOpenFailFastMs(
+  profile: WebRtcReadinessProfile,
+  overallTimeoutMs: number,
+): number | null {
+  if (!usesHalfOpenFailFast(profile)) return null;
+  return Math.min(DEFAULT_HALF_OPEN_FAIL_FAST_MS, overallTimeoutMs);
+}
+
+export function formatWebRtcConnectTimeoutMessage(
+  status: WebRtcConnectionStatus,
+  options: {
+    elapsedMs: number;
+    halfOpen: boolean;
+    halfOpenElapsedMs?: number;
+  },
+): string {
+  const parts = [
+    options.halfOpen
+      ? `WebRTC half-open timeout after ${options.elapsedMs}ms`
+      : `WebRTC connect timeout after ${options.elapsedMs}ms`,
+    `half_open=${options.halfOpen ? "true" : "false"}`,
+    `phase=${status.phase}`,
+    `pc=${status.peerConnectionState}`,
+    `signalingJoined=${status.signalingJoined}`,
+    `control=${status.controlChannelOpen}`,
+    `sync=${status.syncChannelOpen}`,
+  ];
+  if (options.halfOpenElapsedMs !== undefined) {
+    parts.push(`half_open_elapsed_ms=${options.halfOpenElapsedMs}`);
+  }
+  return parts.join("; ");
 }

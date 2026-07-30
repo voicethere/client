@@ -16,7 +16,9 @@ import type { SessionCredentials } from "./session-provision.js";
 import type { DebugConsole } from "./debug-console.js";
 import {
   buildWebRtcConnectionStatus,
+  formatWebRtcConnectTimeoutMessage,
   isWebRtcConnectionReady,
+  resolveHalfOpenFailFastMs,
   resolveReadinessProfile,
   type WebRtcConnectionSnapshot,
   type WebRtcConnectionStatus,
@@ -949,11 +951,15 @@ export async function connectBrowserVoiceSession(
       if (!isOfferCurrent() || !isPcCurrent()) return;
       logOfferStep(step);
 
-      step = "wait_ice_gathering";
-      await waitForIceGatheringComplete(localPc);
-      if (!isOfferCurrent() || !isPcCurrent()) return;
-      logOfferStep(step);
-
+      // Send the answer immediately — do NOT wait for ICE gathering.
+      // Waiting races TURN CreatePermission on the runner: Chrome starts
+      // connectivity checks right after setLocalDescription, but the runner only
+      // learns our srflx/relay (and installs TURN permissions) after the answer
+      // + trickle candidates arrive. Hosting many host/IPv6/TURN gathers can
+      // delay gathering-complete past Chrome's ICE failure (~15–20s) → every
+      // pair shows STUN sent / 0 responses (relay↔relay included). Trickle
+      // `onicecandidate` already ships candidates; the runner queues them until
+      // setRemoteDescription(answer).
       step = "send_answer";
       sendToServer({
         type: "answer",
@@ -962,6 +968,19 @@ export async function connectBrowserVoiceSession(
       });
       debug?.info("signaling", "answer_sent");
       logOfferStep(step);
+
+      // Best-effort: surface gather completion in debug logs (non-blocking).
+      void waitForIceGatheringComplete(localPc)
+        .then(() => {
+          if (!isOfferCurrent() || !isPcCurrent()) return;
+          debug?.info("webrtc", "ice_gathering_complete");
+          logOfferStep("wait_ice_gathering");
+        })
+        .catch((error: unknown) => {
+          if (!isOfferCurrent() || !isPcCurrent()) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          debug?.warn("webrtc", "ice_gathering_wait_failed", detail);
+        });
     } catch (error: unknown) {
       if (!isOfferCurrent()) return;
       const detail = error instanceof Error ? error.message : String(error);
@@ -1277,15 +1296,46 @@ export async function connectBrowserVoiceSession(
 
   const waitForConnected = async (timeoutMs = 60_000): Promise<void> => {
     const deadlineMs = Date.now() + timeoutMs;
+    const halfOpenFailFastMs = resolveHalfOpenFailFastMs(
+      readinessProfile,
+      timeoutMs,
+    );
+    let halfOpenSince: number | null = null;
 
-    const throwConnectTimeout = (): never => {
+    const syncHalfOpenClock = (): void => {
+      if (!halfOpenFailFastMs) {
+        halfOpenSince = null;
+        return;
+      }
       const status = buildWebRtcConnectionStatus(
         connectionSnapshot,
         readinessProfile,
       );
-      const elapsedMs = timeoutMs;
+      if (status.peerConnectionState === "connected" && !status.ready) {
+        halfOpenSince ??= Date.now();
+      } else {
+        halfOpenSince = null;
+      }
+    };
+
+    const throwConnectTimeout = (halfOpen: boolean): never => {
+      const status = buildWebRtcConnectionStatus(
+        connectionSnapshot,
+        readinessProfile,
+      );
+      const halfOpenElapsedMs =
+        halfOpen && halfOpenSince !== null
+          ? Date.now() - halfOpenSince
+          : undefined;
+      const elapsedMs = halfOpen
+        ? (halfOpenFailFastMs ?? timeoutMs)
+        : timeoutMs;
       const error = new Error(
-        `WebRTC connect timeout after ${elapsedMs}ms; phase=${status.phase}; pc=${status.peerConnectionState}; signalingJoined=${status.signalingJoined}; control=${status.controlChannelOpen}; sync=${status.syncChannelOpen}`,
+        formatWebRtcConnectTimeoutMessage(status, {
+          elapsedMs,
+          halfOpen,
+          halfOpenElapsedMs,
+        }),
       );
       notifySessionError({
         type: "session_error",
@@ -1299,6 +1349,7 @@ export async function connectBrowserVoiceSession(
     };
 
     while (true) {
+      syncHalfOpenClock();
       if (isWebRtcConnectionReady(connectionSnapshot, readinessProfile)) {
         clearConnectedWait();
         return;
@@ -1312,8 +1363,21 @@ export async function connectBrowserVoiceSession(
 
       const remainingMs = deadlineMs - Date.now();
       if (remainingMs <= 0) {
-        throwConnectTimeout();
+        throwConnectTimeout(false);
       }
+
+      if (halfOpenSince !== null && halfOpenFailFastMs !== null) {
+        const halfOpenElapsedMs = Date.now() - halfOpenSince;
+        if (halfOpenElapsedMs >= halfOpenFailFastMs) {
+          throwConnectTimeout(true);
+        }
+      }
+
+      const halfOpenRemainingMs =
+        halfOpenSince !== null && halfOpenFailFastMs !== null
+          ? halfOpenFailFastMs - (Date.now() - halfOpenSince)
+          : Number.POSITIVE_INFINITY;
+      const waitMs = Math.min(remainingMs, halfOpenRemainingMs);
 
       const waitPromise = ensureConnectedPromise();
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1323,7 +1387,7 @@ export async function connectBrowserVoiceSession(
           new Promise<void>((_, reject) => {
             timer = setTimeout(() => {
               reject(new Error("__wait_for_connected_timeout__"));
-            }, remainingMs);
+            }, waitMs);
           }),
         ]);
       } catch (error) {
@@ -1331,7 +1395,15 @@ export async function connectBrowserVoiceSession(
           error instanceof Error &&
           error.message === "__wait_for_connected_timeout__"
         ) {
-          throwConnectTimeout();
+          syncHalfOpenClock();
+          if (
+            halfOpenSince !== null &&
+            halfOpenFailFastMs !== null &&
+            Date.now() - halfOpenSince >= halfOpenFailFastMs
+          ) {
+            throwConnectTimeout(true);
+          }
+          throwConnectTimeout(false);
         }
         if (isWebRtcConnectRetryError(error)) {
           debug?.info(
