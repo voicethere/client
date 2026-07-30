@@ -454,7 +454,63 @@ export async function connectBrowserVoiceSession(
       markTerminalRemoteSessionError(legacy);
       return;
     }
+    if (message.type === "session_close") {
+      gracefulDisconnect = true;
+      const closeCode =
+        typeof message.code === "string" ? message.code : undefined;
+      const closeReason =
+        typeof message.reason === "string" ? message.reason : undefined;
+      const closeMessage =
+        typeof message.message === "string" ? message.message : undefined;
+      const idleTimeout =
+        closeCode === "idle_timeout" || closeReason === "idle_timeout";
+      notifySessionError({
+        type: "session_error",
+        code: idleTimeout ? "SESSION_IDLE_TIMEOUT" : "WEBRTC_CONNECTION_CLOSED",
+        message: idleTimeout
+          ? (closeMessage ?? "Session ended due to idle timeout")
+          : (closeMessage ?? "WebRTC session closed by server"),
+        session_id: orchestratorSessionId,
+        recoverable: false,
+        occurred_at: new Date().toISOString(),
+      });
+      debug?.info(
+        "session",
+        "remote_close",
+        closeCode ?? closeReason ?? "unknown",
+      );
+      if (connectionSnapshot.peerConnectionState !== "closed") {
+        updateConnectionSnapshot({
+          peerConnectionState: "closed",
+          controlChannelOpen: false,
+          syncChannelOpen: false,
+        });
+      }
+      return;
+    }
     options.onControlMessage?.(message);
+  };
+
+  const emitAutoReconnectExhausted = (reason: string): void => {
+    if (gracefulDisconnect) return;
+    debug?.warn("session", "auto_reconnect_exhausted", reason);
+    gracefulDisconnect = true;
+    notifySessionError(
+      createLocalSessionError({
+        code: "WEBRTC_RECONNECT_EXHAUSTED",
+        message: `Auto-reconnect exhausted after ${maxAutoReconnectAttempts} attempts (${reason})`,
+        sessionId: orchestratorSessionId,
+        recoverable: false,
+      }),
+    );
+    updateConnectionSnapshot({
+      signalingJoined: false,
+      controlChannelOpen: false,
+      syncChannelOpen: false,
+      ...(connectionSnapshot.peerConnectionState !== "closed"
+        ? { peerConnectionState: "closed" as const }
+        : {}),
+    });
   };
 
   const ensureConnectedPromise = (): Promise<void> => {
@@ -522,6 +578,12 @@ export async function connectBrowserVoiceSession(
     rejectConnectedWait(new Error(`peer connection ${state}`), retriable);
     if (retriable) {
       scheduleAutoReconnect(reconnectReason);
+    } else if (
+      !gracefulDisconnect &&
+      maxAutoReconnectAttempts > 0 &&
+      autoReconnectAttempts >= maxAutoReconnectAttempts
+    ) {
+      emitAutoReconnectExhausted(reconnectReason);
     }
   };
 
@@ -557,7 +619,8 @@ export async function connectBrowserVoiceSession(
         debug?.info("speech", message.event ?? "event", message.text);
       } else if (
         message.type !== "session_error" &&
-        message.type !== "agent_error"
+        message.type !== "agent_error" &&
+        message.type !== "session_close"
       ) {
         logDcMessage(debug, message.type ?? "json", message.text);
       }
@@ -1031,7 +1094,7 @@ export async function connectBrowserVoiceSession(
   const scheduleAutoReconnect = (reason: string): void => {
     if (gracefulDisconnect || reconnectPolicy === "new-session") return;
     if (autoReconnectAttempts >= maxAutoReconnectAttempts) {
-      debug?.warn("session", "auto_reconnect_exhausted", reason);
+      emitAutoReconnectExhausted(reason);
       return;
     }
     autoReconnectAttempts += 1;

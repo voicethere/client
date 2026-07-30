@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## 0.7.19 — 2026-07-30
+
+### Fixed
+
+- **Inbound `session_close`** — idle kick and other server-initiated closes now emit a non-recoverable `session_error` (`SESSION_IDLE_TIMEOUT` or `WEBRTC_CONNECTION_CLOSED`) and stop auto-reconnect so dashboard chat does not stay "Connected".
+- **`auto_reconnect_exhausted`** — emits `WEBRTC_RECONNECT_EXHAUSTED`, marks the session terminal, and publishes a closed/not-ready connection snapshot.
+
 ## 0.7.18 — 2026-07-30
 
 ### Fixed

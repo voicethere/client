@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { SessionErrorEvent } from "../session-errors.js";
 import {
   connectBrowserVoiceSession,
   VOICE_AGENT_SERVER_PEER_ID,
@@ -88,7 +89,9 @@ class MockPeerConnection {
     return {} as RTCRtpSender;
   }
 
-  async setRemoteDescription(description: RTCSessionDescriptionInit): Promise<void> {
+  async setRemoteDescription(
+    description: RTCSessionDescriptionInit,
+  ): Promise<void> {
     this.remoteDescription = description;
   }
 
@@ -98,7 +101,9 @@ class MockPeerConnection {
     return { type: "answer", sdp: "v=0\r\na=ice-ufrag:local\r\n" };
   }
 
-  async setLocalDescription(description: RTCSessionDescriptionInit): Promise<void> {
+  async setLocalDescription(
+    description: RTCSessionDescriptionInit,
+  ): Promise<void> {
     this.localDescription = description;
     this.iceGatheringState = "complete";
     this.onicegatheringstatechange?.();
@@ -137,7 +142,7 @@ function sendOffer(ws: MockWebSocket): void {
   });
 }
 
-function openDataChannels(pc: MockPeerConnection): void {
+function openDataChannels(pc: MockPeerConnection): MockDataChannel {
   const control = new MockDataChannel(VOICE_CONTROL_CHANNEL_LABEL);
   const sync = new MockDataChannel(VOICE_SYNC_CHANNEL_LABEL);
   pc.ondatachannel?.({ channel: control } as RTCDataChannelEvent);
@@ -145,6 +150,7 @@ function openDataChannels(pc: MockPeerConnection): void {
   pc.connect();
   control.open();
   sync.open();
+  return control;
 }
 
 const credentials = {
@@ -239,5 +245,120 @@ describe("connectBrowserVoiceSession ICE reconnect", () => {
     await Promise.resolve();
 
     await expect(pending).rejects.toThrow("peer connection failed");
+  });
+
+  it("emits WEBRTC_RECONNECT_EXHAUSTED when auto-reconnect budget is spent", async () => {
+    vi.useFakeTimers();
+
+    const sessionErrors: SessionErrorEvent[] = [];
+    const reconnectingAttempts: number[] = [];
+    const runtime: WebRtcRuntime = {
+      WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
+      RTCPeerConnection:
+        MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+    };
+
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: false,
+      readiness: "data",
+      runtime,
+      maxAutoReconnectAttempts: 1,
+      onReconnecting: (attempt) => reconnectingAttempts.push(attempt),
+      onSessionError: (event) => sessionErrors.push(event),
+    });
+
+    sendOffer(MockWebSocket.instances[0]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    MockPeerConnection.instances[0].fail();
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+
+    const secondWs = MockWebSocket.instances.at(-1);
+    expect(secondWs).toBeDefined();
+    sendOffer(secondWs!);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    MockPeerConnection.instances.at(-1)!.fail();
+    await Promise.resolve();
+
+    const exhausted = sessionErrors.find(
+      (event) => event.code === "WEBRTC_RECONNECT_EXHAUSTED",
+    );
+    expect(exhausted).toMatchObject({
+      code: "WEBRTC_RECONNECT_EXHAUSTED",
+      recoverable: false,
+    });
+    expect(reconnectingAttempts).toEqual([1]);
+    expect(session.getConnectionStatus().ready).toBe(false);
+    expect(session.getConnectionStatus().peerConnectionState).toBe("closed");
+
+    const wsCountAfterExhaust = MockWebSocket.instances.length;
+    await vi.advanceTimersByTimeAsync(8_000);
+    await Promise.resolve();
+    expect(MockWebSocket.instances.length).toBe(wsCountAfterExhaust);
+  });
+
+  it("handles inbound session_close idle kick with SESSION_IDLE_TIMEOUT and no reconnect", async () => {
+    vi.useFakeTimers();
+
+    const sessionErrors: SessionErrorEvent[] = [];
+    const reconnecting = vi.fn();
+    const runtime: WebRtcRuntime = {
+      WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
+      RTCPeerConnection:
+        MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+    };
+
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: false,
+      readiness: "data",
+      runtime,
+      maxAutoReconnectAttempts: 2,
+      onReconnecting: reconnecting,
+      onSessionError: (event) => sessionErrors.push(event),
+    });
+
+    sendOffer(MockWebSocket.instances[0]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const control = openDataChannels(MockPeerConnection.instances[0]);
+    await session.waitForConnected(1_000);
+    expect(session.getConnectionStatus().ready).toBe(true);
+
+    control.onmessage?.({
+      data: JSON.stringify({
+        type: "session_close",
+        code: "idle_timeout",
+        message: "Peer idle for 300s",
+      }),
+    });
+    await Promise.resolve();
+
+    expect(sessionErrors).toContainEqual(
+      expect.objectContaining({
+        code: "SESSION_IDLE_TIMEOUT",
+        message: "Peer idle for 300s",
+        recoverable: false,
+      }),
+    );
+    expect(session.getConnectionStatus().ready).toBe(false);
+    expect(session.getConnectionStatus().peerConnectionState).toBe("closed");
+
+    const wsCountBefore = MockWebSocket.instances.length;
+    MockPeerConnection.instances[0].fail();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(8_000);
+    await Promise.resolve();
+
+    expect(reconnecting).not.toHaveBeenCalled();
+    expect(MockWebSocket.instances.length).toBe(wsCountBefore);
   });
 });
