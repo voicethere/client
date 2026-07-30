@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildWebRtcConnectionStatus,
   deriveWebRtcConnectionPhase,
+  formatWebRtcConnectTimeoutMessage,
   isWebRtcConnectionReady,
+  resolveHalfOpenFailFastMs,
   resolveReadinessProfile,
+  usesHalfOpenFailFast,
   type WebRtcConnectionSnapshot,
 } from "./webrtc-connection-status.js";
 
@@ -25,7 +28,10 @@ describe("webrtc connection readiness", () => {
     expect(resolveReadinessProfile({ requestMic: true })).toBe("voice");
     expect(resolveReadinessProfile({ requestMic: false })).toBe("data");
     expect(
-      resolveReadinessProfile({ requestMic: true, readiness: "voice_and_data" }),
+      resolveReadinessProfile({
+        requestMic: true,
+        readiness: "voice_and_data",
+      }),
     ).toBe("voice_and_data");
   });
 
@@ -106,5 +112,41 @@ describe("webrtc connection readiness", () => {
         "voice",
       ),
     ).toMatchObject({ phase: "ready", ready: true });
+  });
+
+  it("resolves half-open fail-fast only for voice profiles", () => {
+    expect(usesHalfOpenFailFast("voice")).toBe(true);
+    expect(usesHalfOpenFailFast("voice_and_data")).toBe(true);
+    expect(usesHalfOpenFailFast("data")).toBe(false);
+    expect(resolveHalfOpenFailFastMs("voice", 60_000)).toBe(20_000);
+    expect(resolveHalfOpenFailFastMs("voice", 15_000)).toBe(15_000);
+    expect(resolveHalfOpenFailFastMs("data", 60_000)).toBeNull();
+  });
+
+  it("formats connect timeout messages with half_open diagnostics", () => {
+    const status = buildWebRtcConnectionStatus(
+      connectedBase({
+        inboundAudioTrack: true,
+        outboundAudioTrack: false,
+      }),
+      "voice",
+    );
+    expect(
+      formatWebRtcConnectTimeoutMessage(status, {
+        elapsedMs: 20_000,
+        halfOpen: true,
+        halfOpenElapsedMs: 20_050,
+      }),
+    ).toBe(
+      "WebRTC half-open timeout after 20000ms; half_open=true; phase=awaiting_media; pc=connected; signalingJoined=true; control=false; sync=false; half_open_elapsed_ms=20050",
+    );
+    expect(
+      formatWebRtcConnectTimeoutMessage(status, {
+        elapsedMs: 60_000,
+        halfOpen: false,
+      }),
+    ).toBe(
+      "WebRTC connect timeout after 60000ms; half_open=false; phase=awaiting_media; pc=connected; signalingJoined=true; control=false; sync=false",
+    );
   });
 });

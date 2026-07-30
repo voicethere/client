@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## 0.7.18 — 2026-07-30
+
+### Fixed
+
+- **Browser ICE:** send the SDP answer immediately after `setLocalDescription` and trickle candidates via `onicecandidate`, instead of waiting for `iceGatheringState === "complete"`. Waiting for gather-complete delayed CreatePermission on the runner and caused Chromium sessions (especially TURN relay) to fail with `WEBRTC_CONNECTION_FAILED` while Node clients succeeded.
+- **`waitForConnected`:** fail fast when `connectionState` / `iceConnectionState` enter `failed` or `disconnected`, instead of waiting for the full timeout (dashboard half-open recovery).
+
 ## 0.7.17 — 2026-07-28
 
 ### Changed
