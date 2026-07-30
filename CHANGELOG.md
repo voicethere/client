@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.7.20 — 2026-07-31
+
+### Changed
+
+- **Deps** — `@node-webrtc-rust/{sdk,signaling}` **0.7.0** (Opus SDP omits `maxaveragebitrate` unless env set; encode default 400 kbps).
+
 ## 0.7.19 — 2026-07-30
 
 ### Fixed
