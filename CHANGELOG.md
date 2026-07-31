@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.7.22 — 2026-07-31
+
 ### Fixed
 
 - **POST `/sessions` 429 mapping** — monthly usage gate responses (`NWRTC_MONTHLY_USAGE_EXCEEDED`) now surface `MONTHLY_USAGE_EXCEEDED` instead of always `CAPACITY_EXCEEDED`.
