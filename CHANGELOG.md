@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.7.21 — 2026-07-31
+
+### Fixed
+
+- **`getConnectionState()` after idle kick** — inbound `session_close` now sets internal `connectionState` to `closed` (matching connection status), so callers polling `getConnectionState()` observe the disconnect.
+
 ## 0.7.20 — 2026-07-31
 
 ### Changed
