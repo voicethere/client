@@ -351,6 +351,7 @@ describe("connectBrowserVoiceSession ICE reconnect", () => {
     );
     expect(session.getConnectionStatus().ready).toBe(false);
     expect(session.getConnectionStatus().peerConnectionState).toBe("closed");
+    expect(session.getConnectionState()).toBe("closed");
 
     const wsCountBefore = MockWebSocket.instances.length;
     MockPeerConnection.instances[0].fail();
