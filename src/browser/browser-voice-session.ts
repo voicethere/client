@@ -479,6 +479,7 @@ export async function connectBrowserVoiceSession(
         "remote_close",
         closeCode ?? closeReason ?? "unknown",
       );
+      connectionState = "closed";
       if (connectionSnapshot.peerConnectionState !== "closed") {
         updateConnectionSnapshot({
           peerConnectionState: "closed",
