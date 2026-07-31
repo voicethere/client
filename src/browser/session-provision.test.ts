@@ -12,6 +12,7 @@ import {
 import {
   isCapacityWaitStatus,
   isTerminalSessionJobStatus,
+  resolvePostSessions429FailureCode,
   startSession,
   type SessionStatusResponse,
 } from "./session-provision.js";
@@ -315,6 +316,100 @@ describe("pollSessionStatus integration", () => {
     expect(result.ok).toBe(true);
     expect(delays[0]).toBe(1000);
     expect(delays[1]).toBe(1000);
+  });
+});
+
+describe("resolvePostSessions429FailureCode", () => {
+  it("maps NWRTC_MONTHLY_USAGE_EXCEEDED JSON to MONTHLY_USAGE_EXCEEDED", () => {
+    const body = JSON.stringify({
+      error: {
+        code: "NWRTC_MONTHLY_USAGE_EXCEEDED",
+        message: "Monthly usage credits exhausted for this project.",
+      },
+    });
+    expect(resolvePostSessions429FailureCode(body)).toBe(
+      "MONTHLY_USAGE_EXCEEDED",
+    );
+  });
+
+  it("maps MONTHLY_USAGE_EXCEEDED JSON to MONTHLY_USAGE_EXCEEDED", () => {
+    const body = JSON.stringify({
+      error: {
+        code: "MONTHLY_USAGE_EXCEEDED",
+        message: "Monthly usage credits exhausted.",
+      },
+    });
+    expect(resolvePostSessions429FailureCode(body)).toBe(
+      "MONTHLY_USAGE_EXCEEDED",
+    );
+  });
+
+  it("maps capacity and other 429 bodies to CAPACITY_EXCEEDED", () => {
+    expect(
+      resolvePostSessions429FailureCode(
+        JSON.stringify({ error: { code: "CAPACITY_EXCEEDED" } }),
+      ),
+    ).toBe("CAPACITY_EXCEEDED");
+    expect(resolvePostSessions429FailureCode("queue full")).toBe(
+      "CAPACITY_EXCEEDED",
+    );
+    expect(resolvePostSessions429FailureCode("")).toBe("CAPACITY_EXCEEDED");
+  });
+});
+
+describe("startSession POST /sessions 429", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns MONTHLY_USAGE_EXCEEDED when API body says NWRTC_MONTHLY_USAGE_EXCEEDED", async () => {
+    const body = JSON.stringify({
+      error: {
+        code: "NWRTC_MONTHLY_USAGE_EXCEEDED",
+        message: "Monthly usage credits exhausted for this project.",
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        text: async () => body,
+      }),
+    );
+
+    const result = await startSession({
+      apiBase: "https://sessions.example/v1",
+      projectId: PROJECT_ID,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      code: "MONTHLY_USAGE_EXCEEDED",
+      message: `POST /sessions monthly usage exceeded (429): ${body}`,
+    });
+  });
+
+  it("returns CAPACITY_EXCEEDED for other 429 bodies", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        text: async () => "queue full",
+      }),
+    );
+
+    const result = await startSession({
+      apiBase: "https://sessions.example/v1",
+      projectId: PROJECT_ID,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      code: "CAPACITY_EXCEEDED",
+      message: "POST /sessions capacity exceeded (429): queue full",
+    });
   });
 });
 

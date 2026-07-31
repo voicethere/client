@@ -103,6 +103,43 @@ export function isCapacityWaitStatus(status: SessionStatusResponse): boolean {
   return status.status === "waiting";
 }
 
+const MONTHLY_USAGE_API_CODES = new Set([
+  "NWRTC_MONTHLY_USAGE_EXCEEDED",
+  "MONTHLY_USAGE_EXCEEDED",
+]);
+
+/** Map POST /sessions 429 body to client failure code (capacity vs monthly usage). */
+export function resolvePostSessions429FailureCode(
+  responseText: string,
+): "MONTHLY_USAGE_EXCEEDED" | "CAPACITY_EXCEEDED" {
+  const trimmed = responseText.trim();
+  if (!trimmed) {
+    return "CAPACITY_EXCEEDED";
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      error?: { code?: string };
+      code?: string;
+    };
+    const apiCode = parsed.error?.code ?? parsed.code ?? "";
+    if (MONTHLY_USAGE_API_CODES.has(apiCode)) {
+      return "MONTHLY_USAGE_EXCEEDED";
+    }
+  } catch {
+    // non-JSON — fall through to substring match
+  }
+
+  if (
+    trimmed.includes("NWRTC_MONTHLY_USAGE_EXCEEDED") ||
+    trimmed.includes("MONTHLY_USAGE_EXCEEDED")
+  ) {
+    return "MONTHLY_USAGE_EXCEEDED";
+  }
+
+  return "CAPACITY_EXCEEDED";
+}
+
 function emitProvisionError(
   options: StartSessionOptions,
   input: {
@@ -184,14 +221,19 @@ export async function startSession(
 
   if (res.status === 429) {
     const text = await res.text().catch(() => "");
-    const message = `POST /sessions capacity exceeded (${res.status}): ${text}`;
+    const code = resolvePostSessions429FailureCode(text);
+    const reason =
+      code === "MONTHLY_USAGE_EXCEEDED"
+        ? "monthly usage exceeded"
+        : "capacity exceeded";
+    const message = `POST /sessions ${reason} (${res.status}): ${text}`;
     emitProvisionError(options, {
-      code: "CAPACITY_EXCEEDED",
+      code,
       message,
     });
     return {
       ok: false,
-      code: "CAPACITY_EXCEEDED",
+      code,
       message,
     };
   }
