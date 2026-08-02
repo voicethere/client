@@ -1,7 +1,7 @@
 {
   "name": "@voicethere/client",
   "version": "0.7.22",
-  "description": "VoiceThere browser/Node client — cloud gateway, browser voice/chat, embed widget",
+  "description": "VoiceThere browser/Node client \u2014 cloud gateway, browser voice/chat, embed widget",
   "type": "module",
   "exports": {
     ".": {
@@ -44,7 +44,7 @@
   "bugs": {
     "url": "https://github.com/voicethere/client/issues"
   },
-  "homepage": "https://github.com/voicethere/client#readme",
+  "homepage": "https://voicethere.io",
   "publishConfig": {
     "access": "public"
   },
