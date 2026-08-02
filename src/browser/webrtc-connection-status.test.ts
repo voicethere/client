@@ -4,6 +4,7 @@ import {
   buildWebRtcConnectionStatus,
   deriveWebRtcConnectionPhase,
   formatWebRtcConnectTimeoutMessage,
+  isHalfOpenConnection,
   isWebRtcConnectionReady,
   resolveHalfOpenFailFastMs,
   resolveReadinessProfile,
@@ -123,6 +124,55 @@ describe("webrtc connection readiness", () => {
     expect(resolveHalfOpenFailFastMs("data", 60_000)).toBeNull();
   });
 
+  it("detects half-open when ICE is up but PC is still connecting", () => {
+    const status = buildWebRtcConnectionStatus(
+      connectedBase({
+        peerConnectionState: "connecting",
+        iceConnectionState: "connected",
+      }),
+      "voice_and_data",
+    );
+    expect(status.phase).toBe("connecting");
+    expect(status.ready).toBe(false);
+    expect(isHalfOpenConnection(status)).toBe(true);
+
+    expect(
+      isHalfOpenConnection(
+        buildWebRtcConnectionStatus(
+          connectedBase({
+            peerConnectionState: "connecting",
+            iceConnectionState: "completed",
+          }),
+          "voice",
+        ),
+      ),
+    ).toBe(true);
+
+    expect(
+      isHalfOpenConnection(
+        buildWebRtcConnectionStatus(
+          connectedBase({
+            peerConnectionState: "connecting",
+            iceConnectionState: "checking",
+          }),
+          "voice",
+        ),
+      ),
+    ).toBe(false);
+
+    expect(
+      isHalfOpenConnection(
+        buildWebRtcConnectionStatus(
+          connectedBase({
+            peerConnectionState: "connected",
+            controlChannelOpen: false,
+          }),
+          "voice_and_data",
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("formats connect timeout messages with half_open diagnostics", () => {
     const status = buildWebRtcConnectionStatus(
       connectedBase({
@@ -147,6 +197,24 @@ describe("webrtc connection readiness", () => {
       }),
     ).toBe(
       "WebRTC connect timeout after 60000ms; half_open=false; phase=awaiting_media; pc=connected; signalingJoined=true; control=false; sync=false",
+    );
+    expect(
+      formatWebRtcConnectTimeoutMessage(
+        buildWebRtcConnectionStatus(
+          connectedBase({
+            peerConnectionState: "connecting",
+            iceConnectionState: "connected",
+          }),
+          "voice",
+        ),
+        {
+          elapsedMs: 20_000,
+          halfOpen: true,
+          halfOpenElapsedMs: 20_001,
+        },
+      ),
+    ).toBe(
+      "WebRTC half-open timeout after 20000ms; half_open=true; phase=connecting; pc=connecting; ice=connected; signalingJoined=true; control=false; sync=false; half_open_elapsed_ms=20001",
     );
   });
 });

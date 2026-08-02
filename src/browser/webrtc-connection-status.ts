@@ -16,6 +16,8 @@ export type WebRtcConnectionPhase =
 export type WebRtcConnectionSnapshot = {
   signalingJoined: boolean;
   peerConnectionState: RTCPeerConnectionState | "new";
+  /** Present when the runtime exposes RTCPeerConnection.iceConnectionState. */
+  iceConnectionState?: RTCIceConnectionState | "new";
   inboundAudioTrack: boolean;
   outboundAudioTrack: boolean;
   controlChannelOpen: boolean;
@@ -97,6 +99,24 @@ export function usesHalfOpenFailFast(profile: WebRtcReadinessProfile): boolean {
   return profile === "voice" || profile === "voice_and_data";
 }
 
+function iceTransportConnected(
+  iceConnectionState: WebRtcConnectionSnapshot["iceConnectionState"],
+): boolean {
+  return (
+    iceConnectionState === "connected" || iceConnectionState === "completed"
+  );
+}
+
+/** ICE up but session readiness (media/channels) not satisfied — half-open fail-fast arms. */
+export function isHalfOpenConnection(status: WebRtcConnectionStatus): boolean {
+  if (status.ready) return false;
+  if (status.peerConnectionState === "connected") return true;
+  return (
+    iceTransportConnected(status.iceConnectionState) &&
+    status.peerConnectionState === "connecting"
+  );
+}
+
 export function resolveHalfOpenFailFastMs(
   profile: WebRtcReadinessProfile,
   overallTimeoutMs: number,
@@ -120,6 +140,9 @@ export function formatWebRtcConnectTimeoutMessage(
     `half_open=${options.halfOpen ? "true" : "false"}`,
     `phase=${status.phase}`,
     `pc=${status.peerConnectionState}`,
+    ...(status.iceConnectionState !== undefined
+      ? [`ice=${status.iceConnectionState}`]
+      : []),
     `signalingJoined=${status.signalingJoined}`,
     `control=${status.controlChannelOpen}`,
     `sync=${status.syncChannelOpen}`,

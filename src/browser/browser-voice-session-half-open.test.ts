@@ -102,6 +102,13 @@ class MockPeerConnection {
     this.onconnectionstatechange?.();
   }
 
+  setIceConnectedWhileConnecting(): void {
+    this.connectionState = "connecting";
+    this.onconnectionstatechange?.();
+    this.iceConnectionState = "connected";
+    this.oniceconnectionstatechange?.();
+  }
+
   close(): void {
     this.connectionState = "closed";
   }
@@ -230,6 +237,54 @@ describe("connectBrowserVoiceSession half-open fail-fast", () => {
       expect(message).toMatch(/phase=awaiting_channels/);
       expect(message).toMatch(/control=false/);
       expect(message).toMatch(/sync=false/);
+    }
+  });
+
+  it("voice_and_data fails fast when ICE is connected but PC stays connecting", async () => {
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: true,
+      readiness: "voice_and_data",
+      runtime: createMicRuntime(),
+      maxAutoReconnectAttempts: 0,
+    });
+
+    sendOffer(MockWebSocket.instances[0]!);
+    const pc = await waitForOfferNegotiation();
+    wireDataChannelsWithoutOpening(pc);
+    wireVoiceMedia(pc);
+    pc.setIceConnectedWhileConnecting();
+    await Promise.resolve();
+
+    expect(session.getConnectionStatus()).toMatchObject({
+      phase: "connecting",
+      peerConnectionState: "connecting",
+      iceConnectionState: "connected",
+      controlChannelOpen: false,
+      syncChannelOpen: false,
+    });
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const pending = session.waitForConnected(60_000);
+
+    await vi.advanceTimersByTimeAsync(19_999);
+    await Promise.resolve();
+    await expect(
+      Promise.race([pending, Promise.resolve("still waiting")]),
+    ).resolves.toBe("still waiting");
+
+    await vi.advanceTimersByTimeAsync(2);
+    try {
+      await pending;
+      throw new Error("expected rejection");
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      const message = (error as Error).message;
+      expect(message).toMatch(/half-open timeout/);
+      expect(message).toMatch(/half_open=true/);
+      expect(message).toMatch(/phase=connecting/);
+      expect(message).toMatch(/pc=connecting/);
+      expect(message).toMatch(/ice=connected/);
     }
   });
 
