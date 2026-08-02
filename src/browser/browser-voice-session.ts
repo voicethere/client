@@ -16,6 +16,7 @@ import type { SessionCredentials } from "./session-provision.js";
 import type { DebugConsole } from "./debug-console.js";
 import {
   buildWebRtcConnectionStatus,
+  isHalfOpenConnection,
   formatWebRtcConnectTimeoutMessage,
   isWebRtcConnectionReady,
   resolveHalfOpenFailFastMs,
@@ -392,6 +393,7 @@ export async function connectBrowserVoiceSession(
   const connectionSnapshot: WebRtcConnectionSnapshot = {
     signalingJoined: false,
     peerConnectionState: "new",
+    iceConnectionState: "new",
     inboundAudioTrack: false,
     outboundAudioTrack: false,
     controlChannelOpen: false,
@@ -701,6 +703,7 @@ export async function connectBrowserVoiceSession(
     }
     updateConnectionSnapshot({
       peerConnectionState: "new",
+      iceConnectionState: "new",
       inboundAudioTrack: false,
       outboundAudioTrack: false,
       controlChannelOpen: false,
@@ -954,11 +957,9 @@ export async function connectBrowserVoiceSession(
 
       localPc.oniceconnectionstatechange = () => {
         if (!isPcCurrent()) return;
-        debug?.info(
-          "webrtc",
-          "ice_connection_state",
-          localPc.iceConnectionState ?? "unknown",
-        );
+        const iceConnectionState = localPc.iceConnectionState ?? "new";
+        debug?.info("webrtc", "ice_connection_state", iceConnectionState);
+        updateConnectionSnapshot({ iceConnectionState });
       };
 
       localPc.onicegatheringstatechange = () => {
@@ -1375,7 +1376,7 @@ export async function connectBrowserVoiceSession(
         connectionSnapshot,
         readinessProfile,
       );
-      if (status.peerConnectionState === "connected" && !status.ready) {
+      if (isHalfOpenConnection(status)) {
         halfOpenSince ??= Date.now();
       } else {
         halfOpenSince = null;
