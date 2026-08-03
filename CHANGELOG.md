@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.7.24 — 2026-08-03
+
+### Added
+
+- **`onReconnected`** — callback after same-session reconnect reaches ready again (not on first connect). Enables load/e2e mid-turn phrase resend without treating reconnect as a fresh session.
+
 ## 0.7.23 — 2026-08-03
 
 ### Added
