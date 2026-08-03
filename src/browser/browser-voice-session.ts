@@ -211,6 +211,11 @@ export type BrowserVoiceSession = {
   getWebRtcDiagnostics: () => Promise<WebRtcDiagnostics | null>;
   /** Re-open signaling with the same credentials and peer id (same orchestrator session). */
   reconnect: () => Promise<void>;
+  /**
+   * Test/E2E hook — force-close the signaling WebSocket so `signaling_closed`
+   * auto-reconnect runs (e.g. after `session_reconnect_token` updates join credentials).
+   */
+  forceCloseSignalingForTests: () => void;
 };
 
 function defaultPeerId(): string {
@@ -291,10 +296,11 @@ export async function connectBrowserVoiceSession(
   const peerId = options.peerId ?? defaultPeerId();
   const roomId = options.credentials.room_id;
   const orchestratorSessionId = options.credentials.session_id;
-  const signalingUrl = appendJoinToken(
-    options.credentials.signaling_url,
-    options.credentials.join_token,
-  );
+  /** Mutable join credentials — updated by inbound `session_reconnect_token`. */
+  const joinCredentials: SessionCredentials = { ...options.credentials };
+  const rebuildSignalingUrl = (): string =>
+    appendJoinToken(joinCredentials.signaling_url, joinCredentials.join_token);
+  let signalingUrl = rebuildSignalingUrl();
   const iceServers = options.credentials.ice_servers?.length
     ? options.credentials.ice_servers
     : [{ urls: "stun:stun.l.google.com:19302" }];
@@ -454,6 +460,24 @@ export async function connectBrowserVoiceSession(
     if (legacy) {
       notifySessionError(legacy);
       markTerminalRemoteSessionError(legacy);
+      return;
+    }
+    if (message.type === "session_reconnect_token") {
+      const token =
+        typeof message.token === "string" ? message.token.trim() : "";
+      if (!token) {
+        debug?.warn("session", "reconnect_token_rejected", "empty token");
+        return;
+      }
+      joinCredentials.join_token = token;
+      if (
+        typeof message.expiresAt === "string" &&
+        message.expiresAt.length > 0
+      ) {
+        joinCredentials.expires_at = message.expiresAt;
+      }
+      signalingUrl = rebuildSignalingUrl();
+      debug?.info("session", "reconnect_token_updated");
       return;
     }
     if (message.type === "session_close") {
@@ -623,7 +647,8 @@ export async function connectBrowserVoiceSession(
       } else if (
         message.type !== "session_error" &&
         message.type !== "agent_error" &&
-        message.type !== "session_close"
+        message.type !== "session_close" &&
+        message.type !== "session_reconnect_token"
       ) {
         logDcMessage(debug, message.type ?? "json", message.text);
       }
@@ -1506,6 +1531,16 @@ export async function connectBrowserVoiceSession(
     reconnect: async () => {
       autoReconnectAttempts = 0;
       await reconnectSignaling();
+    },
+    forceCloseSignalingForTests: (): void => {
+      if (gracefulDisconnect || reconnectPolicy === "new-session") return;
+      const localWs = ws;
+      if (!localWs) return;
+      try {
+        localWs.close();
+      } catch {
+        /* ignore */
+      }
     },
     sendSpeak: (text: string) => {
       requireOpenControl().send(JSON.stringify({ type: "speak", text }));

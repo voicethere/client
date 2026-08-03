@@ -362,4 +362,126 @@ describe("connectBrowserVoiceSession ICE reconnect", () => {
     expect(reconnecting).not.toHaveBeenCalled();
     expect(MockWebSocket.instances.length).toBe(wsCountBefore);
   });
+
+  it("updates join token from session_reconnect_token and uses it on explicit reconnect", async () => {
+    const runtime: WebRtcRuntime = {
+      WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
+      RTCPeerConnection:
+        MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+    };
+
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: false,
+      readiness: "data",
+      runtime,
+    });
+
+    sendOffer(MockWebSocket.instances[0]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const control = openDataChannels(MockPeerConnection.instances[0]);
+    await session.waitForConnected(1_000);
+
+    control.onmessage?.({
+      data: JSON.stringify({
+        type: "session_reconnect_token",
+        token: "opaque-reconnect-token",
+        expiresAt: new Date(Date.now() + 120_000).toISOString(),
+      }),
+    });
+    await Promise.resolve();
+
+    const wsCountBeforeReconnect = MockWebSocket.instances.length;
+    await session.reconnect();
+    await Promise.resolve();
+
+    const reconnectWs = MockWebSocket.instances.at(-1);
+    expect(MockWebSocket.instances.length).toBe(wsCountBeforeReconnect + 1);
+    expect(reconnectWs?.url).toContain("token=opaque-reconnect-token");
+    expect(reconnectWs?.url).not.toContain("token=join");
+  });
+
+  it("ignores session_reconnect_token with empty token", async () => {
+    const runtime: WebRtcRuntime = {
+      WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
+      RTCPeerConnection:
+        MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+    };
+
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: false,
+      readiness: "data",
+      runtime,
+    });
+
+    sendOffer(MockWebSocket.instances[0]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const control = openDataChannels(MockPeerConnection.instances[0]);
+    await session.waitForConnected(1_000);
+
+    control.onmessage?.({
+      data: JSON.stringify({
+        type: "session_reconnect_token",
+        token: "   ",
+      }),
+    });
+    await Promise.resolve();
+
+    await session.reconnect();
+    await Promise.resolve();
+
+    const reconnectWs = MockWebSocket.instances.at(-1);
+    expect(reconnectWs?.url).toContain("token=join");
+  });
+
+  it("forceCloseSignalingForTests auto-reconnects with updated join token", async () => {
+    vi.useFakeTimers();
+
+    const runtime: WebRtcRuntime = {
+      WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
+      RTCPeerConnection:
+        MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+    };
+
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: false,
+      readiness: "data",
+      runtime,
+      maxAutoReconnectAttempts: 2,
+    });
+
+    sendOffer(MockWebSocket.instances[0]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const control = openDataChannels(MockPeerConnection.instances[0]);
+    await session.waitForConnected(1_000);
+
+    control.onmessage?.({
+      data: JSON.stringify({
+        type: "session_reconnect_token",
+        token: "opaque-after-ws-close",
+      }),
+    });
+    await Promise.resolve();
+
+    const firstWs = MockWebSocket.instances[0];
+    const wsCountBefore = MockWebSocket.instances.length;
+    session.forceCloseSignalingForTests();
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+
+    expect(MockWebSocket.instances.length).toBe(wsCountBefore + 1);
+    const secondWs = MockWebSocket.instances.at(-1);
+    expect(secondWs).not.toBe(firstWs);
+    expect(secondWs?.url).toContain("token=opaque-after-ws-close");
+  });
 });
