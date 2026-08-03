@@ -447,12 +447,21 @@ describe("connectBrowserVoiceSession ICE reconnect", () => {
       RTCPeerConnection:
         MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
     };
+    const onControlMessage = vi.fn();
+    const reconnectToken = "vtrec_test_opaque_reconnect_token";
+    const expiresAt = new Date(Date.now() + 120_000).toISOString();
+    const reconnectMessage = {
+      type: "session_reconnect_token",
+      token: reconnectToken,
+      expiresAt,
+    };
 
     const session = await connectBrowserVoiceSession({
       credentials,
       requestMic: false,
       readiness: "data",
       runtime,
+      onControlMessage,
     });
 
     sendOffer(MockWebSocket.instances[0]);
@@ -463,13 +472,11 @@ describe("connectBrowserVoiceSession ICE reconnect", () => {
     await session.waitForConnected(1_000);
 
     control.onmessage?.({
-      data: JSON.stringify({
-        type: "session_reconnect_token",
-        token: "opaque-reconnect-token",
-        expiresAt: new Date(Date.now() + 120_000).toISOString(),
-      }),
+      data: JSON.stringify(reconnectMessage),
     });
     await Promise.resolve();
+
+    expect(onControlMessage).toHaveBeenCalledWith(reconnectMessage);
 
     const wsCountBeforeReconnect = MockWebSocket.instances.length;
     await session.reconnect();
@@ -477,7 +484,7 @@ describe("connectBrowserVoiceSession ICE reconnect", () => {
 
     const reconnectWs = MockWebSocket.instances.at(-1);
     expect(MockWebSocket.instances.length).toBe(wsCountBeforeReconnect + 1);
-    expect(reconnectWs?.url).toContain("token=opaque-reconnect-token");
+    expect(reconnectWs?.url).toContain(`token=${reconnectToken}`);
     expect(reconnectWs?.url).not.toContain("token=join");
   });
 
