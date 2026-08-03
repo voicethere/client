@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## 0.7.23 — 2026-08-03
+
+### Added
+
+- **`session_reconnect_token`** — voice-control handler updates in-memory join credentials when the runner mints an opaque reconnect token; same-session `reconnect()` and auto-reconnect open signaling with the latest token.
+- **`forceCloseSignalingForTests()`** — test/E2E hook on `BrowserVoiceSession` to force-close the signaling WebSocket and trigger `signaling_closed` auto-reconnect.
+
 ## 0.7.22 — 2026-07-31
 
 ### Fixed
