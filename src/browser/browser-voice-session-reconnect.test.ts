@@ -221,6 +221,84 @@ describe("connectBrowserVoiceSession ICE reconnect", () => {
     expect(reconnectingAttempts).toEqual([1]);
   });
 
+  it("onReconnected fires after same-session reconnect reaches ready, not on initial connect", async () => {
+    vi.useFakeTimers();
+
+    const runtime: WebRtcRuntime = {
+      WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
+      RTCPeerConnection:
+        MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+    };
+
+    const reconnectedAttempts: number[] = [];
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: false,
+      readiness: "data",
+      runtime,
+      maxAutoReconnectAttempts: 2,
+      onReconnected: (attempt) => reconnectedAttempts.push(attempt),
+    });
+
+    sendOffer(MockWebSocket.instances[0]);
+    await Promise.resolve();
+    await Promise.resolve();
+    openDataChannels(MockPeerConnection.instances[0]);
+    await session.waitForConnected(1_000);
+    expect(reconnectedAttempts).toEqual([]);
+
+    const pending = session.waitForConnected(10_000);
+    MockPeerConnection.instances[0].fail();
+    await Promise.resolve();
+    MockPeerConnection.nextOptions = { failOnConnect: false };
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await Promise.resolve();
+    await Promise.resolve();
+    openDataChannels(MockPeerConnection.instances.at(-1)!);
+
+    await pending;
+    expect(reconnectedAttempts).toEqual([1]);
+  });
+
+  it("onReconnected fires after manual reconnect()", async () => {
+    const runtime: WebRtcRuntime = {
+      WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
+      RTCPeerConnection:
+        MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+    };
+
+    const reconnectedAttempts: number[] = [];
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: false,
+      readiness: "data",
+      runtime,
+      onReconnected: (attempt) => reconnectedAttempts.push(attempt),
+    });
+
+    sendOffer(MockWebSocket.instances[0]);
+    await Promise.resolve();
+    await Promise.resolve();
+    openDataChannels(MockPeerConnection.instances[0]);
+    await session.waitForConnected(1_000);
+    expect(reconnectedAttempts).toEqual([]);
+
+    await session.reconnect();
+    await Promise.resolve();
+
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await Promise.resolve();
+    await Promise.resolve();
+    openDataChannels(MockPeerConnection.instances.at(-1)!);
+    await session.waitForConnected(1_000);
+
+    expect(reconnectedAttempts).toEqual([0]);
+  });
+
   it("waitForConnected rejects immediately when maxAutoReconnectAttempts is 0", async () => {
     const runtime: WebRtcRuntime = {
       WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],

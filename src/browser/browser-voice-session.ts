@@ -164,6 +164,11 @@ export type BrowserVoiceSessionOptions = {
   maxAutoReconnectAttempts?: number;
   onReconnecting?: (attempt: number) => void;
   /**
+   * Fired when same-session reconnect (auto or manual) reaches readiness again
+   * after the initial connect — not on first connect.
+   */
+  onReconnected?: (attempt: number) => void;
+  /**
    * Readiness gate for `waitForConnected()` / `getConnectionStatus().ready`.
    * Defaults from `requestMic`: voice sessions wait for inbound+outbound audio tracks;
    * data sessions wait for voice-control and voicethere-sync channels to open.
@@ -391,6 +396,9 @@ export async function connectBrowserVoiceSession(
   const maxAutoReconnectAttempts = options.maxAutoReconnectAttempts ?? 4;
   let autoReconnectAttempts = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let hasReachedReadyOnce = false;
+  let awaitingReconnectedCallback = false;
+  let lastReconnectAttemptForCallback = 0;
   const readinessProfile = resolveReadinessProfile({
     requestMic: options.requestMic,
     readiness: options.readiness,
@@ -427,6 +435,11 @@ export async function connectBrowserVoiceSession(
   const tryResolveConnected = (): void => {
     if (!isWebRtcConnectionReady(connectionSnapshot, readinessProfile)) return;
     pendingConnectFailure = null;
+    if (awaitingReconnectedCallback && hasReachedReadyOnce) {
+      options.onReconnected?.(lastReconnectAttemptForCallback);
+      awaitingReconnectedCallback = false;
+    }
+    hasReachedReadyOnce = true;
     resolveConnected?.();
     // Success path must drop waiter handles immediately (not only timeout/reject).
     clearConnectedWait();
@@ -520,6 +533,7 @@ export async function connectBrowserVoiceSession(
 
   const emitAutoReconnectExhausted = (reason: string): void => {
     if (gracefulDisconnect) return;
+    awaitingReconnectedCallback = false;
     debug?.warn("session", "auto_reconnect_exhausted", reason);
     gracefulDisconnect = true;
     notifySessionError(
@@ -1125,6 +1139,8 @@ export async function connectBrowserVoiceSession(
       return;
     }
     autoReconnectAttempts += 1;
+    lastReconnectAttemptForCallback = autoReconnectAttempts;
+    awaitingReconnectedCallback = true;
     options.onReconnecting?.(autoReconnectAttempts);
     const delayMs = Math.min(1000 * 2 ** (autoReconnectAttempts - 1), 8000);
     if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -1530,6 +1546,8 @@ export async function connectBrowserVoiceSession(
     waitForConnected,
     reconnect: async () => {
       autoReconnectAttempts = 0;
+      lastReconnectAttemptForCallback = 0;
+      awaitingReconnectedCallback = true;
       await reconnectSignaling();
     },
     forceCloseSignalingForTests: (): void => {
@@ -1590,6 +1608,7 @@ export async function connectBrowserVoiceSession(
       signalingEpoch += 1;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       reconnectTimer = undefined;
+      awaitingReconnectedCallback = false;
       stopMicPump?.();
       stopMicPump = null;
       rejectConnected?.(new Error("disconnected"));
@@ -1683,6 +1702,7 @@ export async function connectBrowserVoiceSession(
         signalingEpoch += 1;
         if (reconnectTimer) clearTimeout(reconnectTimer);
         reconnectTimer = undefined;
+        awaitingReconnectedCallback = false;
         stopMicPump?.();
         stopMicPump = null;
         rejectConnected?.(new Error("disconnected"));

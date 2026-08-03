@@ -31,6 +31,7 @@ export type ConnectBrowserSessionOptions = {
   reconnectPolicy?: import("./browser-voice-session.js").ReconnectPolicy;
   maxAutoReconnectAttempts?: number;
   onReconnecting?: (attempt: number) => void;
+  onReconnected?: (attempt: number) => void;
   onConnectionStatus?: (status: WebRtcConnectionStatus) => void;
   iceTransportPolicy?: BrowserVoiceSessionOptions["iceTransportPolicy"];
   onDiagnosticEvent?: BrowserVoiceSessionOptions["onDiagnosticEvent"];
@@ -85,6 +86,7 @@ export async function connectBrowserSession(
     reconnectPolicy: options.reconnectPolicy,
     maxAutoReconnectAttempts: options.maxAutoReconnectAttempts,
     onReconnecting: options.onReconnecting,
+    onReconnected: options.onReconnected,
     onConnectionStatus: options.onConnectionStatus,
     iceTransportPolicy: options.iceTransportPolicy,
     onDiagnosticEvent: options.onDiagnosticEvent,
