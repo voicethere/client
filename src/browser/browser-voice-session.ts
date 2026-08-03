@@ -164,8 +164,8 @@ export type BrowserVoiceSessionOptions = {
   maxAutoReconnectAttempts?: number;
   onReconnecting?: (attempt: number) => void;
   /**
-   * Fired when same-session reconnect (auto, manual, or proactive pre-expiry) reaches
-   * readiness again after the initial connect — not on first connect.
+   * Fired when same-session reconnect (auto or manual) reaches readiness again
+   * after the initial connect — not on first connect.
    */
   onReconnected?: (attempt: number) => void;
   /**
@@ -293,11 +293,6 @@ function createMicPump(
   };
 }
 
-/** Same-session proactive reconnect lead time before join `expires_at`. */
-export const PROACTIVE_RECONNECT_BEFORE_EXPIRY_MS = 45_000;
-/** Minimum remaining TTL when `session_reconnect_token` arrives to schedule proactive reconnect. */
-export const PROACTIVE_RECONNECT_MIN_REMAINING_MS = 30_000;
-
 export async function connectBrowserVoiceSession(
   options: BrowserVoiceSessionOptions,
 ): Promise<BrowserVoiceSession> {
@@ -401,7 +396,6 @@ export async function connectBrowserVoiceSession(
   const maxAutoReconnectAttempts = options.maxAutoReconnectAttempts ?? 4;
   let autoReconnectAttempts = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-  let proactiveReconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let hasReachedReadyOnce = false;
   let awaitingReconnectedCallback = false;
   let lastReconnectAttemptForCallback = 0;
@@ -451,47 +445,6 @@ export async function connectBrowserVoiceSession(
     clearConnectedWait();
   };
 
-  const cancelProactiveReconnect = (): void => {
-    if (proactiveReconnectTimer) {
-      clearTimeout(proactiveReconnectTimer);
-      proactiveReconnectTimer = undefined;
-    }
-  };
-
-  const scheduleProactiveReconnectBeforeExpiry = (): void => {
-    cancelProactiveReconnect();
-    if (gracefulDisconnect || reconnectPolicy === "new-session") return;
-    const expiresAt = joinCredentials.expires_at;
-    if (!expiresAt) return;
-    const expiresMs = Date.parse(expiresAt);
-    if (!Number.isFinite(expiresMs)) return;
-    const remainingMs = expiresMs - Date.now();
-    if (remainingMs <= PROACTIVE_RECONNECT_MIN_REMAINING_MS) return;
-    const delayMs = Math.max(
-      0,
-      remainingMs - PROACTIVE_RECONNECT_BEFORE_EXPIRY_MS,
-    );
-    proactiveReconnectTimer = setTimeout(() => {
-      proactiveReconnectTimer = undefined;
-      if (gracefulDisconnect) return;
-      lastReconnectAttemptForCallback = autoReconnectAttempts;
-      awaitingReconnectedCallback = true;
-      debug?.info(
-        "session",
-        "proactive_reconnect_before_expiry",
-        `remaining_ms=${expiresMs - Date.now()}`,
-      );
-      void reconnectSignaling().catch((error: unknown) => {
-        awaitingReconnectedCallback = false;
-        debug?.warn(
-          "session",
-          "proactive_reconnect_failed",
-          error instanceof Error ? error.message : String(error),
-        );
-      });
-    }, delayMs);
-  };
-
   const updateConnectionSnapshot = (
     patch: Partial<WebRtcConnectionSnapshot>,
   ): void => {
@@ -538,7 +491,6 @@ export async function connectBrowserVoiceSession(
       }
       signalingUrl = rebuildSignalingUrl();
       debug?.info("session", "reconnect_token_updated");
-      scheduleProactiveReconnectBeforeExpiry();
       return;
     }
     if (message.type === "session_close") {
@@ -1656,7 +1608,6 @@ export async function connectBrowserVoiceSession(
       signalingEpoch += 1;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       reconnectTimer = undefined;
-      cancelProactiveReconnect();
       awaitingReconnectedCallback = false;
       stopMicPump?.();
       stopMicPump = null;
@@ -1751,7 +1702,6 @@ export async function connectBrowserVoiceSession(
         signalingEpoch += 1;
         if (reconnectTimer) clearTimeout(reconnectTimer);
         reconnectTimer = undefined;
-        cancelProactiveReconnect();
         awaitingReconnectedCallback = false;
         stopMicPump?.();
         stopMicPump = null;
