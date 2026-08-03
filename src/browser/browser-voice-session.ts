@@ -491,6 +491,7 @@ export async function connectBrowserVoiceSession(
       }
       signalingUrl = rebuildSignalingUrl();
       debug?.info("session", "reconnect_token_updated");
+      options.onControlMessage?.(message);
       return;
     }
     if (message.type === "session_close") {

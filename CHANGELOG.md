@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.7.25 — 2026-08-03
+
+### Fixed
+
+- **`session_reconnect_token`** — after updating join credentials, forward the control message to `onControlMessage` so E2E waiters and app hooks observe the token (previously returned early after internal update only).
+
 ## 0.7.24 — 2026-08-03
 
 ### Added
