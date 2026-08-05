@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## 0.7.26 — 2026-08-05
+
+### Added
+
+- **ICE recovery (relay-leaning)** — before same-session auto-reconnect budget: on PeerConnection fail (or stuck ICE checking ≥12s with `nominated=0`), rebuild via signaling with `iceTransportPolicy=relay`. Uses `onIceRecovery` / `maxIceRecoveryAttempts` (default **1**) and does **not** increment `autoReconnectAttempts` or call `onReconnecting`. Set `maxIceRecoveryAttempts=0` for legacy behavior; `iceRecoveryStuckCheckingMs=0` disables proactive stuck-checking.
+- **`webrtc ice_triage`** — compact diagnostics line (selected/nominated/succeeded/failed + host/srflx/relay counts) in `formatWebRtcDiagnosticsLines` / `formatIceTriageLine`.
+
 ## 0.7.25 — 2026-08-03
 
 ### Fixed
