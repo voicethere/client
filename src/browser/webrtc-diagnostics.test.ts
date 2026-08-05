@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  formatIceTriageLine,
   formatWebRtcDiagnosticsLines,
   summarizeRtcStatsReport,
 } from "./webrtc-diagnostics.js";
@@ -263,7 +264,47 @@ describe("formatWebRtcDiagnosticsLines", () => {
     expect(lines[2]).toContain("prflx_local=0");
     expect(lines[2]).toContain("unknown_local=0");
     expect(lines[2]).toContain("local_reports=0");
-    expect(lines.at(-1)).toContain("selected_pair none");
+    expect(lines.some((l) => l.includes("selected_pair none"))).toBe(true);
+    expect(lines.some((l) => l.includes("webrtc ice_triage"))).toBe(true);
+  });
+
+  it("formatIceTriageLine includes policy and checking_ms when provided", () => {
+    const line = formatIceTriageLine(
+      {
+        peerConnectionState: "connecting",
+        iceConnectionState: "checking",
+        iceGatheringState: "complete",
+        signalingState: "stable",
+        connectionStatus: buildWebRtcConnectionStatus(
+          {
+            signalingJoined: true,
+            peerConnectionState: "connecting",
+            inboundAudioTrack: false,
+            outboundAudioTrack: false,
+            controlChannelOpen: false,
+            syncChannelOpen: false,
+          },
+          "data",
+        ),
+        stats: {
+          totalReports: 10,
+          candidatePairs: 30,
+          nominatedPairs: 0,
+          succeededPairs: 4,
+          failedPairs: 26,
+          relayLocalCandidates: 1,
+          hostLocalCandidates: 2,
+          srflxLocalCandidates: 1,
+          hostRemoteCandidates: 1,
+          srflxRemoteCandidates: 2,
+          relayRemoteCandidates: 0,
+        },
+      },
+      { iceTransportPolicy: "all", checkingMs: 12000 },
+    );
+    expect(line).toBe(
+      "webrtc ice_triage selected=none nominated=0 succeeded=4 failed=26 local_host=2 local_srflx=1 local_relay=1 remote_host=1 remote_srflx=2 remote_relay=0 policy=all checking_ms=12000",
+    );
   });
 
   it("prints per-pair lines with ? for missing types and omits fixture addresses", () => {

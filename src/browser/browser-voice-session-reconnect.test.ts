@@ -66,6 +66,7 @@ class MockPeerConnection {
   static instances: MockPeerConnection[] = [];
   static nextOptions: MockPeerOptions = {};
 
+  readonly config: RTCConfiguration | undefined;
   localDescription: RTCSessionDescriptionInit | null = null;
   remoteDescription: RTCSessionDescriptionInit | null = null;
   connectionState: RTCPeerConnectionState = "new";
@@ -80,7 +81,8 @@ class MockPeerConnection {
 
   readonly options: MockPeerOptions;
 
-  constructor(_config?: RTCConfiguration) {
+  constructor(config?: RTCConfiguration) {
+    this.config = config;
     this.options = { ...MockPeerConnection.nextOptions };
     MockPeerConnection.instances.push(this);
   }
@@ -187,6 +189,7 @@ describe("connectBrowserVoiceSession ICE reconnect", () => {
       readiness: "data",
       runtime,
       maxAutoReconnectAttempts: 2,
+      maxIceRecoveryAttempts: 0,
       onReconnecting: (attempt) => reconnectingAttempts.push(attempt),
     });
 
@@ -237,6 +240,7 @@ describe("connectBrowserVoiceSession ICE reconnect", () => {
       readiness: "data",
       runtime,
       maxAutoReconnectAttempts: 2,
+      maxIceRecoveryAttempts: 0,
       onReconnected: (attempt) => reconnectedAttempts.push(attempt),
     });
 
@@ -312,6 +316,7 @@ describe("connectBrowserVoiceSession ICE reconnect", () => {
       readiness: "data",
       runtime,
       maxAutoReconnectAttempts: 0,
+      maxIceRecoveryAttempts: 0,
     });
 
     sendOffer(MockWebSocket.instances[0]);
@@ -342,6 +347,7 @@ describe("connectBrowserVoiceSession ICE reconnect", () => {
       readiness: "data",
       runtime,
       maxAutoReconnectAttempts: 1,
+      maxIceRecoveryAttempts: 0,
       onReconnecting: (attempt) => reconnectingAttempts.push(attempt),
       onSessionError: (event) => sessionErrors.push(event),
     });
@@ -568,5 +574,167 @@ describe("connectBrowserVoiceSession ICE reconnect", () => {
     const secondWs = MockWebSocket.instances.at(-1);
     expect(secondWs).not.toBe(firstWs);
     expect(secondWs?.url).toContain("token=opaque-after-ws-close");
+  });
+});
+
+describe("connectBrowserVoiceSession ICE recovery (relay)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    MockWebSocket.instances = [];
+    MockPeerConnection.instances = [];
+    MockPeerConnection.nextOptions = {};
+  });
+
+  it("uses relay on second PC after ice recovery without onReconnecting", async () => {
+    vi.useFakeTimers();
+
+    const runtime: WebRtcRuntime = {
+      WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
+      RTCPeerConnection:
+        MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+    };
+
+    const iceRecoveryAttempts: number[] = [];
+    const reconnectingAttempts: number[] = [];
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: false,
+      readiness: "data",
+      runtime,
+      iceTransportPolicy: "all",
+      maxIceRecoveryAttempts: 1,
+      maxAutoReconnectAttempts: 2,
+      onIceRecovery: (attempt) => iceRecoveryAttempts.push(attempt),
+      onReconnecting: (attempt) => reconnectingAttempts.push(attempt),
+    });
+
+    sendOffer(MockWebSocket.instances[0]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const pending = session.waitForConnected(10_000);
+    MockPeerConnection.instances[0].fail();
+    await Promise.resolve();
+
+    expect(iceRecoveryAttempts).toEqual([1]);
+    expect(reconnectingAttempts).toEqual([]);
+
+    MockPeerConnection.nextOptions = { failOnConnect: false };
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const secondPc = MockPeerConnection.instances.at(-1)!;
+    expect(secondPc.config?.iceTransportPolicy).toBe("relay");
+    openDataChannels(secondPc);
+    await pending;
+    expect(session.getConnectionStatus().ready).toBe(true);
+  });
+
+  it("falls back to onReconnecting after ice recovery is exhausted", async () => {
+    vi.useFakeTimers();
+
+    const runtime: WebRtcRuntime = {
+      WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
+      RTCPeerConnection:
+        MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+    };
+
+    const iceRecoveryAttempts: number[] = [];
+    const reconnectingAttempts: number[] = [];
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: false,
+      readiness: "data",
+      runtime,
+      iceTransportPolicy: "all",
+      maxIceRecoveryAttempts: 1,
+      maxAutoReconnectAttempts: 2,
+      onIceRecovery: (attempt) => iceRecoveryAttempts.push(attempt),
+      onReconnecting: (attempt) => reconnectingAttempts.push(attempt),
+    });
+
+    sendOffer(MockWebSocket.instances[0]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    MockPeerConnection.instances[0].fail();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await Promise.resolve();
+    await Promise.resolve();
+    MockPeerConnection.instances.at(-1)!.fail();
+    await Promise.resolve();
+
+    expect(iceRecoveryAttempts).toEqual([1]);
+    expect(reconnectingAttempts).toEqual([1]);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await Promise.resolve();
+    await Promise.resolve();
+    openDataChannels(MockPeerConnection.instances.at(-1)!);
+
+    await session.waitForConnected(10_000);
+    expect(reconnectingAttempts).toEqual([1]);
+    expect(
+      MockPeerConnection.instances.at(-1)!.config?.iceTransportPolicy,
+    ).toBe("relay");
+  });
+
+  it("maxIceRecoveryAttempts=0 uses legacy onReconnecting on first failure", async () => {
+    vi.useFakeTimers();
+
+    const runtime: WebRtcRuntime = {
+      WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
+      RTCPeerConnection:
+        MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+    };
+
+    const iceRecoveryAttempts: number[] = [];
+    const reconnectingAttempts: number[] = [];
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: false,
+      readiness: "data",
+      runtime,
+      iceTransportPolicy: "all",
+      maxIceRecoveryAttempts: 0,
+      maxAutoReconnectAttempts: 2,
+      onIceRecovery: (attempt) => iceRecoveryAttempts.push(attempt),
+      onReconnecting: (attempt) => reconnectingAttempts.push(attempt),
+    });
+
+    sendOffer(MockWebSocket.instances[0]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const pending = session.waitForConnected(10_000);
+    MockPeerConnection.instances[0].fail();
+    await Promise.resolve();
+
+    expect(iceRecoveryAttempts).toEqual([]);
+    expect(reconnectingAttempts).toEqual([1]);
+
+    MockPeerConnection.nextOptions = { failOnConnect: false };
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await Promise.resolve();
+    await Promise.resolve();
+    openDataChannels(MockPeerConnection.instances.at(-1)!);
+    await pending;
+    expect(MockPeerConnection.instances[0].config?.iceTransportPolicy).toBe(
+      "all",
+    );
   });
 });
