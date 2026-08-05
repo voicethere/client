@@ -174,8 +174,10 @@ export {
 } from "./webrtc-connection-status.js";
 export {
   collectWebRtcDiagnostics,
+  formatIceTriageLine,
   formatWebRtcDiagnosticsLines,
   summarizeRtcStatsReport,
+  type IceTriageExtra,
   type WebRtcDiagnostics,
   type WebRtcIceCandidatePairSummary,
   type WebRtcStatsSummary,

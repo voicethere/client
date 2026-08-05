@@ -162,6 +162,20 @@ export type BrowserVoiceSessionOptions = {
    * attempts until `timeoutMs` elapses. Set `0` to fail on the first transport error.
    */
   maxAutoReconnectAttempts?: number;
+  /**
+   * Relay-leaning ICE recovery attempts before counting toward
+   * {@link maxAutoReconnectAttempts} / {@link onReconnecting} (default 1).
+   * Set `0` to skip ICE recovery and use legacy auto-reconnect only.
+   */
+  maxIceRecoveryAttempts?: number;
+  /**
+   * When ICE stays in `checking` (or PC `connecting`) with `nominated=0` for at
+   * least this many ms, trigger {@link maxIceRecoveryAttempts} recovery early.
+   * Default 12000; set `0` to disable proactive stuck-checking recovery.
+   */
+  iceRecoveryStuckCheckingMs?: number;
+  /** Fired when starting an ICE recovery attempt (not {@link onReconnecting}). */
+  onIceRecovery?: (attempt: number) => void;
   onReconnecting?: (attempt: number) => void;
   /**
    * Fired when same-session reconnect (auto or manual) reaches readiness again
@@ -394,8 +408,15 @@ export async function connectBrowserVoiceSession(
   };
   const reconnectPolicy = options.reconnectPolicy ?? "same-session";
   const maxAutoReconnectAttempts = options.maxAutoReconnectAttempts ?? 4;
+  const maxIceRecoveryAttempts = options.maxIceRecoveryAttempts ?? 1;
+  const iceRecoveryStuckCheckingMs =
+    options.iceRecoveryStuckCheckingMs ?? 12_000;
+  let effectiveIceTransportPolicy = options.iceTransportPolicy;
   let autoReconnectAttempts = 0;
+  let iceRecoveryAttempts = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let iceStuckWatchTimer: ReturnType<typeof setInterval> | undefined;
+  let iceCheckingSinceMs: number | null = null;
   let hasReachedReadyOnce = false;
   let awaitingReconnectedCallback = false;
   let lastReconnectAttemptForCallback = 0;
@@ -577,6 +598,129 @@ export async function connectBrowserVoiceSession(
     return autoReconnectAttempts < maxAutoReconnectAttempts;
   };
 
+  const canIceRecover = (): boolean => {
+    if (gracefulDisconnect || reconnectPolicy === "new-session") return false;
+    if (maxIceRecoveryAttempts <= 0) return false;
+    return iceRecoveryAttempts < maxIceRecoveryAttempts;
+  };
+
+  const stopIceStuckWatch = (): void => {
+    if (iceStuckWatchTimer) {
+      clearInterval(iceStuckWatchTimer);
+      iceStuckWatchTimer = undefined;
+    }
+    iceCheckingSinceMs = null;
+  };
+
+  const scheduleIceRecovery = (reason: string): void => {
+    if (gracefulDisconnect || reconnectPolicy === "new-session") return;
+    if (!canIceRecover()) {
+      if (canAutoReconnectTransport()) {
+        scheduleAutoReconnect(reason);
+      }
+      return;
+    }
+    iceRecoveryAttempts += 1;
+    if (effectiveIceTransportPolicy !== "relay") {
+      effectiveIceTransportPolicy = "relay";
+    }
+    options.onIceRecovery?.(iceRecoveryAttempts);
+    debug?.info(
+      "session",
+      "ice_recovery_relay",
+      `${reason} attempt=${iceRecoveryAttempts}`,
+    );
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+      void reconnectSignaling().catch((error: unknown) => {
+        debug?.warn(
+          "session",
+          "ice_recovery_failed",
+          error instanceof Error ? error.message : String(error),
+        );
+        if (canAutoReconnectTransport()) {
+          scheduleAutoReconnect(reason);
+        }
+      });
+    }, 0);
+  };
+
+  const triggerIceStuckRecovery = async (checkingMs: number): Promise<void> => {
+    if (!canIceRecover() || gracefulDisconnect) return;
+    stopIceStuckWatch();
+    debug?.warn("session", "ice_stuck_checking", `checking_ms=${checkingMs}`);
+    notifySessionError({
+      type: "session_error",
+      code: "WEBRTC_CONNECTION_FAILED",
+      message: `WebRTC ICE stuck checking (nominated=0, checking_ms=${checkingMs})`,
+      session_id: orchestratorSessionId,
+      recoverable: canIceRecover() || canAutoReconnectTransport(),
+      occurred_at: new Date().toISOString(),
+    });
+    rejectConnectedWait(new Error("peer connection ice stuck checking"), true);
+    await retirePeerConnection({ preserveConnectedWait: true });
+    scheduleIceRecovery("ice_stuck_checking");
+  };
+
+  const checkIceStuck = async (
+    localPc: RTCPeerConnection,
+    isPcCurrent: () => boolean,
+  ): Promise<void> => {
+    if (!isPcCurrent() || gracefulDisconnect) {
+      stopIceStuckWatch();
+      return;
+    }
+    const pcState = localPc.connectionState ?? "new";
+    const iceState = localPc.iceConnectionState ?? "new";
+    if (
+      pcState === "connected" ||
+      pcState === "failed" ||
+      pcState === "closed"
+    ) {
+      stopIceStuckWatch();
+      return;
+    }
+    const stuckEligible =
+      iceState === "checking" || iceState === "new" || pcState === "connecting";
+    if (!stuckEligible) {
+      iceCheckingSinceMs = null;
+      return;
+    }
+    const now = Date.now();
+    iceCheckingSinceMs ??= now;
+    if (now - iceCheckingSinceMs < iceRecoveryStuckCheckingMs) return;
+    if (!canIceRecover()) return;
+
+    let diagnostics: WebRtcDiagnostics | null = null;
+    try {
+      diagnostics = await collectWebRtcDiagnostics(
+        localPc,
+        buildWebRtcConnectionStatus(connectionSnapshot, readinessProfile),
+      );
+    } catch {
+      return;
+    }
+    if (!diagnostics || !isPcCurrent()) return;
+    const s = diagnostics.stats;
+    if (s.nominatedPairs !== 0 || s.selectedPairId) return;
+    const gatheringDone = diagnostics.iceGatheringState === "complete";
+    if (!(s.succeededPairs > 0 || s.candidatePairs > 0 || gatheringDone)) {
+      return;
+    }
+    await triggerIceStuckRecovery(now - iceCheckingSinceMs);
+  };
+
+  const startIceStuckWatch = (
+    localPc: RTCPeerConnection,
+    isPcCurrent: () => boolean,
+  ): void => {
+    if (iceRecoveryStuckCheckingMs <= 0) return;
+    stopIceStuckWatch();
+    iceStuckWatchTimer = setInterval(() => {
+      void checkIceStuck(localPc, isPcCurrent);
+    }, 1000);
+  };
+
   const rejectConnectedWait = (error: Error, retriable: boolean): void => {
     const wrapped = retriable
       ? new WebRtcConnectRetryError(error.message)
@@ -601,7 +745,7 @@ export async function connectBrowserVoiceSession(
           code: "WEBRTC_CONNECTION_FAILED",
           message: "WebRTC peer connection failed",
           session_id: orchestratorSessionId,
-          recoverable: canAutoReconnectTransport(),
+          recoverable: canIceRecover() || canAutoReconnectTransport(),
           occurred_at: new Date().toISOString(),
         });
       } else {
@@ -610,15 +754,18 @@ export async function connectBrowserVoiceSession(
           code: "WEBRTC_CONNECTION_CLOSED",
           message: "WebRTC peer connection closed unexpectedly",
           session_id: orchestratorSessionId,
-          recoverable: canAutoReconnectTransport(),
+          recoverable: canIceRecover() || canAutoReconnectTransport(),
           occurred_at: new Date().toISOString(),
         });
       }
     }
 
-    const retriable = canAutoReconnectTransport();
+    stopIceStuckWatch();
+    const retriable = canIceRecover() || canAutoReconnectTransport();
     rejectConnectedWait(new Error(`peer connection ${state}`), retriable);
-    if (retriable) {
+    if (canIceRecover()) {
+      scheduleIceRecovery(reconnectReason);
+    } else if (retriable) {
       scheduleAutoReconnect(reconnectReason);
     } else if (
       !gracefulDisconnect &&
@@ -906,8 +1053,8 @@ export async function connectBrowserVoiceSession(
       ensureConnectedPromise();
       const localPc = new runtime.RTCPeerConnection({
         iceServers,
-        ...(options.iceTransportPolicy
-          ? { iceTransportPolicy: options.iceTransportPolicy }
+        ...(effectiveIceTransportPolicy
+          ? { iceTransportPolicy: effectiveIceTransportPolicy }
           : {}),
       });
       pc = localPc;
@@ -967,6 +1114,8 @@ export async function connectBrowserVoiceSession(
         if (connectionState === "connected") {
           if (!isPcCurrent()) return;
           autoReconnectAttempts = 0;
+          iceRecoveryAttempts = 0;
+          stopIceStuckWatch();
           stopMicPump?.();
           stopMicPump = null;
           if (micStream && (options.micPump ?? "silent") === "silent") {
@@ -1073,6 +1222,7 @@ export async function connectBrowserVoiceSession(
       });
       debug?.info("signaling", "answer_sent");
       logOfferStep(step);
+      startIceStuckWatch(localPc, isPcCurrent);
 
       // Best-effort: surface gather completion in debug logs (non-blocking).
       void waitForIceGatheringComplete(localPc)
@@ -1547,6 +1697,7 @@ export async function connectBrowserVoiceSession(
     waitForConnected,
     reconnect: async () => {
       autoReconnectAttempts = 0;
+      iceRecoveryAttempts = 0;
       lastReconnectAttemptForCallback = 0;
       awaitingReconnectedCallback = true;
       await reconnectSignaling();

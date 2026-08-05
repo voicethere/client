@@ -28,6 +28,13 @@ export type WebRtcStatsSummary = {
   unknownLocalCandidates?: number;
   /** Count of `local-candidate` stats reports (distinct from type buckets). */
   localCandidateReports?: number;
+  /** Optional remote candidate type buckets (present when stats include remote-candidate rows). */
+  relayRemoteCandidates?: number;
+  hostRemoteCandidates?: number;
+  srflxRemoteCandidates?: number;
+  prflxRemoteCandidates?: number;
+  unknownRemoteCandidates?: number;
+  remoteCandidateReports?: number;
   /**
    * Per-pair diagnostics (all pairs, safely capped). Types resolve via candidate
    * id lookup after collecting local/remote reports — independent of report order.
@@ -116,6 +123,12 @@ export function summarizeRtcStatsReport(
   let prflxLocalCandidates = 0;
   let unknownLocalCandidates = 0;
   let localCandidateReports = 0;
+  let relayRemoteCandidates = 0;
+  let hostRemoteCandidates = 0;
+  let srflxRemoteCandidates = 0;
+  let prflxRemoteCandidates = 0;
+  let unknownRemoteCandidates = 0;
+  let remoteCandidateReports = 0;
 
   // Pass 1: collect candidates and pair rows so resolution is order-independent.
   stats.forEach((report, id) => {
@@ -134,6 +147,13 @@ export function summarizeRtcStatsReport(
     }
     if (type === "remote-candidate") {
       remotes.set(id, row);
+      remoteCandidateReports += 1;
+      const candidateType = readString(row, "candidateType");
+      if (candidateType === "relay") relayRemoteCandidates += 1;
+      else if (candidateType === "host") hostRemoteCandidates += 1;
+      else if (candidateType === "srflx") srflxRemoteCandidates += 1;
+      else if (candidateType === "prflx") prflxRemoteCandidates += 1;
+      else unknownRemoteCandidates += 1;
       return;
     }
     if (type === "candidate-pair") {
@@ -203,12 +223,52 @@ export function summarizeRtcStatsReport(
     prflxLocalCandidates,
     unknownLocalCandidates,
     localCandidateReports,
+    relayRemoteCandidates,
+    hostRemoteCandidates,
+    srflxRemoteCandidates,
+    prflxRemoteCandidates,
+    unknownRemoteCandidates,
+    remoteCandidateReports,
     pairs,
     selectedPairId,
     selectedLocalType,
     selectedRemoteType,
     selectedProtocol,
   };
+}
+
+export type IceTriageExtra = {
+  iceTransportPolicy?: string;
+  checkingMs?: number;
+};
+
+/** One-line ICE triage summary for connect-failure logs (no addresses). */
+export function formatIceTriageLine(
+  diagnostics: WebRtcDiagnostics,
+  extra?: IceTriageExtra,
+): string {
+  const s = diagnostics.stats;
+  const selected = s.selectedPairId ?? "none";
+  const parts = [
+    "webrtc ice_triage",
+    `selected=${selected}`,
+    `nominated=${s.nominatedPairs}`,
+    `succeeded=${s.succeededPairs}`,
+    `failed=${s.failedPairs}`,
+    `local_host=${s.hostLocalCandidates}`,
+    `local_srflx=${s.srflxLocalCandidates}`,
+    `local_relay=${s.relayLocalCandidates}`,
+    `remote_host=${s.hostRemoteCandidates ?? 0}`,
+    `remote_srflx=${s.srflxRemoteCandidates ?? 0}`,
+    `remote_relay=${s.relayRemoteCandidates ?? 0}`,
+  ];
+  if (extra?.iceTransportPolicy) {
+    parts.push(`policy=${extra.iceTransportPolicy}`);
+  }
+  if (extra?.checkingMs != null) {
+    parts.push(`checking_ms=${extra.checkingMs}`);
+  }
+  return parts.join(" ");
 }
 
 export async function collectWebRtcDiagnostics(
@@ -257,6 +317,8 @@ export function formatWebRtcDiagnosticsLines(
   } else {
     lines.push("webrtc selected_pair none");
   }
+
+  lines.push(formatIceTriageLine(diagnostics));
 
   for (const pair of pairs.slice(0, MAX_FORMATTED_PAIRS)) {
     lines.push(

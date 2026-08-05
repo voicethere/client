@@ -43,6 +43,7 @@ export type {
 
 export {
   collectWebRtcDiagnostics,
+  formatIceTriageLine,
   formatWebRtcDiagnosticsLines,
   summarizeRtcStatsReport,
 } from "../browser/browser-session.js";
