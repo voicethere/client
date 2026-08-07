@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Reconnect callbacks** — `onIceRecovery`, `onReconnecting`, and `onReconnected` accept an optional 2nd arg `VoiceSessionReconnectInfo` (`reason`, effective `iceTransportPolicy`) for E2E/load-test diagnostics.
+
 ## 0.7.26 — 2026-08-05
 
 ### Added
