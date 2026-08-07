@@ -30,8 +30,10 @@ export type ConnectBrowserSessionOptions = {
   onAgentAudioTrack?: BrowserVoiceSessionOptions["onAgentAudioTrack"];
   reconnectPolicy?: import("./browser-voice-session.js").ReconnectPolicy;
   maxAutoReconnectAttempts?: number;
-  onReconnecting?: (attempt: number) => void;
-  onReconnected?: (attempt: number) => void;
+  maxIceRecoveryAttempts?: number;
+  onIceRecovery?: import("./browser-voice-session.js").BrowserVoiceSessionOptions["onIceRecovery"];
+  onReconnecting?: import("./browser-voice-session.js").BrowserVoiceSessionOptions["onReconnecting"];
+  onReconnected?: import("./browser-voice-session.js").BrowserVoiceSessionOptions["onReconnected"];
   onConnectionStatus?: (status: WebRtcConnectionStatus) => void;
   iceTransportPolicy?: BrowserVoiceSessionOptions["iceTransportPolicy"];
   onDiagnosticEvent?: BrowserVoiceSessionOptions["onDiagnosticEvent"];
@@ -87,6 +89,8 @@ export async function connectBrowserSession(
     onAgentAudioTrack: options.onAgentAudioTrack,
     reconnectPolicy: options.reconnectPolicy,
     maxAutoReconnectAttempts: options.maxAutoReconnectAttempts,
+    maxIceRecoveryAttempts: options.maxIceRecoveryAttempts,
+    onIceRecovery: options.onIceRecovery,
     onReconnecting: options.onReconnecting,
     onReconnected: options.onReconnected,
     onConnectionStatus: options.onConnectionStatus,
@@ -104,7 +108,10 @@ export async function connectDataSession(
   return connectBrowserVoiceSession({ ...options, requestMic: false });
 }
 
-export type { ReconnectPolicy } from "./browser-voice-session.js";
+export type {
+  ReconnectPolicy,
+  VoiceSessionReconnectInfo,
+} from "./browser-voice-session.js";
 export { connectBrowserChatSession } from "./browser-chat-session.js";
 export {
   connectBrowserVoiceSession,

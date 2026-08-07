@@ -125,6 +125,13 @@ export type SyncBinaryMessageHandler = (data: ArrayBuffer) => void;
 
 export type ReconnectPolicy = "same-session" | "new-session";
 
+/** Passed as optional 2nd arg to same-session reconnect / ICE recovery callbacks. */
+export type VoiceSessionReconnectInfo = {
+  reason: string;
+  /** Effective RTCConfiguration.iceTransportPolicy for the next/current PC. */
+  iceTransportPolicy?: "all" | "relay";
+};
+
 export type BrowserVoiceSessionOptions = {
   credentials: SessionCredentials;
   /**
@@ -196,13 +203,13 @@ export type BrowserVoiceSessionOptions = {
    */
   iceRecoveryStuckCheckingMs?: number;
   /** Fired when starting an ICE recovery attempt (not {@link onReconnecting}). */
-  onIceRecovery?: (attempt: number) => void;
-  onReconnecting?: (attempt: number) => void;
+  onIceRecovery?: (attempt: number, info?: VoiceSessionReconnectInfo) => void;
+  onReconnecting?: (attempt: number, info?: VoiceSessionReconnectInfo) => void;
   /**
    * Fired when same-session reconnect (auto or manual) reaches readiness again
    * after the initial connect — not on first connect.
    */
-  onReconnected?: (attempt: number) => void;
+  onReconnected?: (attempt: number, info?: VoiceSessionReconnectInfo) => void;
   /**
    * Readiness gate for `waitForConnected()` / `getConnectionStatus().ready`.
    * Defaults from `requestMic`: voice sessions wait for inbound+outbound audio tracks;
@@ -468,6 +475,7 @@ export async function connectBrowserVoiceSession(
   let hasReachedReadyOnce = false;
   let awaitingReconnectedCallback = false;
   let lastReconnectAttemptForCallback = 0;
+  let lastReconnectReason: string | undefined;
   const readinessProfile = resolveReadinessProfile({
     requestMic: options.requestMic,
     readiness: options.readiness,
@@ -584,8 +592,9 @@ export async function connectBrowserVoiceSession(
     if (!isWebRtcConnectionReady(connectionSnapshot, readinessProfile)) return;
     pendingConnectFailure = null;
     if (awaitingReconnectedCallback && hasReachedReadyOnce) {
-      options.onReconnected?.(lastReconnectAttemptForCallback);
+      options.onReconnected?.(lastReconnectAttemptForCallback, reconnectInfo());
       awaitingReconnectedCallback = false;
+      lastReconnectReason = undefined;
     }
     hasReachedReadyOnce = true;
     resolveConnected?.();
@@ -725,6 +734,11 @@ export async function connectBrowserVoiceSession(
     return autoReconnectAttempts < maxAutoReconnectAttempts;
   };
 
+  const reconnectInfo = (reason?: string): VoiceSessionReconnectInfo => ({
+    reason: reason ?? lastReconnectReason ?? "unknown",
+    iceTransportPolicy: effectiveIceTransportPolicy,
+  });
+
   const canIceRecover = (): boolean => {
     if (gracefulDisconnect || reconnectPolicy === "new-session") return false;
     if (maxIceRecoveryAttempts <= 0) return false;
@@ -751,7 +765,8 @@ export async function connectBrowserVoiceSession(
     if (effectiveIceTransportPolicy !== "relay") {
       effectiveIceTransportPolicy = "relay";
     }
-    options.onIceRecovery?.(iceRecoveryAttempts);
+    lastReconnectReason = reason;
+    options.onIceRecovery?.(iceRecoveryAttempts, reconnectInfo(reason));
     debug?.info(
       "session",
       "ice_recovery_relay",
@@ -1459,7 +1474,8 @@ export async function connectBrowserVoiceSession(
     autoReconnectAttempts += 1;
     lastReconnectAttemptForCallback = autoReconnectAttempts;
     awaitingReconnectedCallback = true;
-    options.onReconnecting?.(autoReconnectAttempts);
+    lastReconnectReason = reason;
+    options.onReconnecting?.(autoReconnectAttempts, reconnectInfo(reason));
     const delayMs = Math.min(1000 * 2 ** (autoReconnectAttempts - 1), 8000);
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
@@ -1873,6 +1889,7 @@ export async function connectBrowserVoiceSession(
       autoReconnectAttempts = 0;
       iceRecoveryAttempts = 0;
       lastReconnectAttemptForCallback = 0;
+      lastReconnectReason = "manual";
       awaitingReconnectedCallback = true;
       await reconnectSignaling();
     },
