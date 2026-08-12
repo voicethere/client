@@ -35,6 +35,8 @@ export type ConnectBrowserSessionOptions = {
   onConnectionStatus?: (status: WebRtcConnectionStatus) => void;
   iceTransportPolicy?: BrowserVoiceSessionOptions["iceTransportPolicy"];
   onDiagnosticEvent?: BrowserVoiceSessionOptions["onDiagnosticEvent"];
+  /** Preferred audio input device for voice / voice+data sessions. */
+  audioInputDeviceId?: string;
 };
 
 export type BrowserSession = BrowserVoiceSession & {
@@ -90,6 +92,7 @@ export async function connectBrowserSession(
     onConnectionStatus: options.onConnectionStatus,
     iceTransportPolicy: options.iceTransportPolicy,
     onDiagnosticEvent: options.onDiagnosticEvent,
+    audioInputDeviceId: requestMic ? options.audioInputDeviceId : undefined,
   });
 
   return { ...session, mode: resolvedMode };
@@ -204,3 +207,11 @@ export {
   CLIENT_CAPABILITIES,
   type ClientCapabilities,
 } from "./client-capabilities.js";
+export {
+  acquireAudioInput,
+  createSyntheticMicStream,
+  listAudioInputDevices,
+  stopMicStream,
+  type AudioInputDevice,
+  type AudioInputState,
+} from "./microphone.js";

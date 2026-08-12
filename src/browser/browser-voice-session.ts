@@ -47,6 +47,11 @@ import {
   isWebRtcConnectRetryError,
   WebRtcConnectRetryError,
 } from "./webrtc-connect-retry.js";
+import {
+  acquireAudioInput,
+  listAudioInputDevices as listBrowserAudioInputDevices,
+  type AudioInputState,
+} from "./microphone.js";
 
 /** High-rate DC traffic logged at debug level — E2E stderr needs `LOAD_TEST_CLIENT_DEBUG=1`. */
 const HIGH_FREQUENCY_DC_TYPES = new Set([
@@ -119,6 +124,8 @@ export type BrowserVoiceSessionOptions = {
    */
   peerId?: string;
   requestMic?: boolean;
+  /** Preferred audio input device id (`deviceId: { ideal }` for getUserMedia). */
+  audioInputDeviceId?: string;
   /**
    * `silent` (default) — SDK pumps silent 20 ms frames on the mic track after connect.
    * `external` — caller owns `writeSample` on the mic track (load tests, scripted PCM).
@@ -216,6 +223,21 @@ export type BrowserVoiceSession = {
   /** Binary on voicethere-sync data channel (throws if channel not open). */
   sendSyncBinary: (data: ArrayBuffer | Uint8Array) => void;
   getMicStream: () => MediaStream | null;
+  /** Enumerate `audioinput` devices (labels empty until mic permission granted). */
+  listAudioInputDevices: () => Promise<{ deviceId: string; label: string }[]>;
+  /** Active input device id from the live track settings, or null when synthetic. */
+  getAudioInputDeviceId: () => string | null;
+  getAudioInputState: () => AudioInputState;
+  /**
+   * Switch microphone mid-session via `RTCRtpSender.replaceTrack`.
+   * `null` selects the default device. Falls back to synthetic on GUM failure.
+   */
+  setAudioInputDevice: (deviceId: string | null) => Promise<void>;
+  /**
+   * Re-prompt for microphone access. Returns true and replaces the outbound track on
+   * success; false keeps the current (possibly synthetic) stream.
+   */
+  requestAudioInputAccess: () => Promise<boolean>;
   /**
    * Resolves when the session meets the readiness profile (voice: PC + inbound/outbound
    * audio tracks; data: PC + both data channels open) or rejects on timeout/failure.
@@ -265,17 +287,25 @@ function isWriteSampleTrack(track: unknown): track is WriteSampleTrack {
 async function attachMicTracks(
   pc: RTCPeerConnection,
   micStream: MediaStream,
-): Promise<void> {
+): Promise<RTCRtpSender | null> {
+  let micSender: RTCRtpSender | null = null;
   for (const track of micStream.getAudioTracks()) {
     const result = pc.addTrack(track as MediaStreamTrack, micStream) as
-      RTCRtpSender | Promise<RTCRtpSender> | void;
+      | RTCRtpSender
+      | Promise<RTCRtpSender>
+      | void;
+    let sender: RTCRtpSender | void = result as RTCRtpSender | void;
     if (
       result &&
       typeof (result as Promise<RTCRtpSender>).then === "function"
     ) {
-      await result;
+      sender = await result;
+    }
+    if (sender && !micSender) {
+      micSender = sender;
     }
   }
+  return micSender;
 }
 
 function createMicPump(
@@ -329,6 +359,10 @@ export async function connectBrowserVoiceSession(
   let controlChannel: RTCDataChannel | null = null;
   let syncChannel: RTCDataChannel | null = null;
   let micStream: MediaStream | null = null;
+  let micRtpSender: RTCRtpSender | null = null;
+  let audioInputState: AudioInputState = "synthetic";
+  let audioInputDeviceId: string | null = null;
+  let disposeMicHandle: (() => void) | null = null;
   /** ICE candidates queued by negotiation generation until that PC is ready. */
   const pendingIceByGeneration = new Map<number, RTCIceCandidateInit[]>();
   let connectionState: RTCPeerConnectionState | "new" = "new";
@@ -446,11 +480,90 @@ export async function connectBrowserVoiceSession(
       updateConnectionSnapshot({ outboundAudioTrack: false });
       return;
     }
+    const hasLiveTrack = micStream
+      .getAudioTracks()
+      .some((track) => track.readyState === "live");
     updateConnectionSnapshot({
-      outboundAudioTrack: micStream
-        .getAudioTracks()
-        .some((track) => track.readyState === "live"),
+      outboundAudioTrack: hasLiveTrack,
     });
+  };
+
+  const disposeCurrentMic = (): void => {
+    disposeMicHandle?.();
+    disposeMicHandle = null;
+    micStream = null;
+    audioInputDeviceId = null;
+  };
+
+  const applyMicAcquisition = (result: Awaited<
+    ReturnType<typeof acquireAudioInput>
+  >): void => {
+    disposeCurrentMic();
+    micStream = result.stream;
+    audioInputState = result.state;
+    audioInputDeviceId = result.deviceId;
+    disposeMicHandle = result.dispose;
+  };
+
+  const restartMicPumpIfConnected = (): void => {
+    stopMicPump?.();
+    stopMicPump = null;
+    const localPc = pc;
+    if (
+      !micStream ||
+      !localPc ||
+      localPc.connectionState !== "connected" ||
+      (options.micPump ?? "silent") !== "silent"
+    ) {
+      return;
+    }
+    stopMicPump = createMicPump(
+      micStream,
+      () => pc === localPc && localPc.connectionState === "connected",
+      debug,
+    );
+  };
+
+  const replaceMicOnSender = async (
+    nextStream: MediaStream,
+  ): Promise<void> => {
+    const nextTrack = nextStream.getAudioTracks()[0] ?? null;
+    if (micRtpSender) {
+      await micRtpSender.replaceTrack(nextTrack);
+      return;
+    }
+    const localPc = pc;
+    if (localPc && nextTrack) {
+      micRtpSender = await attachMicTracks(localPc, nextStream);
+    }
+  };
+
+  const switchAudioInput = async (
+    deviceId: string | null,
+    options?: { reRequest?: boolean },
+  ): Promise<boolean> => {
+    const getUserMedia = runtime.getUserMedia;
+    const result = await acquireAudioInput({
+      getUserMedia,
+      deviceId,
+    });
+    if (result.state !== "live" && options?.reRequest) {
+      result.dispose();
+      return false;
+    }
+    applyMicAcquisition(result);
+    if (result.state === "live") {
+      debug?.info("voice", "mic_granted");
+    } else if (result.state === "denied") {
+      debug?.info("voice", "mic_denied");
+      debug?.info("voice", "mic_synthetic_fallback");
+    } else {
+      debug?.info("voice", "mic_synthetic_fallback");
+    }
+    await replaceMicOnSender(result.stream);
+    syncOutboundAudioTrack();
+    restartMicPumpIfConnected();
+    return result.state === "live";
   };
 
   const tryResolveConnected = (): void => {
@@ -849,18 +962,20 @@ export async function connectBrowserVoiceSession(
   };
 
   if (options.requestMic !== false) {
-    const getUserMedia = runtime.getUserMedia;
-    if (!getUserMedia) {
-      throw new Error(
-        "runtime.getUserMedia is required when requestMic is true",
-      );
-    }
-    micStream = await getUserMedia({
-      audio: true,
-      video: false,
+    const result = await acquireAudioInput({
+      getUserMedia: runtime.getUserMedia,
+      deviceId: options.audioInputDeviceId,
     });
+    applyMicAcquisition(result);
+    if (result.state === "live") {
+      debug?.info("voice", "mic_granted");
+    } else if (result.state === "denied") {
+      debug?.info("voice", "mic_denied");
+      debug?.info("voice", "mic_synthetic_fallback");
+    } else {
+      debug?.info("voice", "mic_synthetic_fallback");
+    }
     syncOutboundAudioTrack();
-    debug?.info("voice", "mic_granted");
   }
 
   /**
@@ -905,6 +1020,7 @@ export async function connectBrowserVoiceSession(
       };
     }
     intentionallyRetiringPcs.add(localPc);
+    micRtpSender = null;
     // Detach from live slot before awaiting close so handlers see identity change.
     pc = null;
     const closeResult = await closePeerConnectionAwaitable(localPc);
@@ -1162,7 +1278,7 @@ export async function connectBrowserVoiceSession(
 
       if (micStream) {
         step = "attach_mic";
-        await attachMicTracks(localPc, micStream);
+        micRtpSender = await attachMicTracks(localPc, micStream);
         if (!isPcCurrent()) return;
         syncOutboundAudioTrack();
         if ((options.micPump ?? "silent") === "external") {
@@ -1517,9 +1633,8 @@ export async function connectBrowserVoiceSession(
         /* ignore */
       }
     }
-    const localMic = micStream;
-    micStream = null;
-    localMic?.getTracks().forEach((track) => track.stop());
+    disposeCurrentMic();
+    micRtpSender = null;
     updateConnectionSnapshot({
       signalingJoined: false,
       outboundAudioTrack: false,
@@ -1686,6 +1801,14 @@ export async function connectBrowserVoiceSession(
   return {
     peerId,
     getMicStream: () => micStream,
+    listAudioInputDevices: () => listBrowserAudioInputDevices(),
+    getAudioInputDeviceId: () => audioInputDeviceId,
+    getAudioInputState: () => audioInputState,
+    setAudioInputDevice: async (deviceId: string | null) => {
+      await switchAudioInput(deviceId);
+    },
+    requestAudioInputAccess: async () =>
+      switchAudioInput(audioInputDeviceId, { reRequest: true }),
     getConnectionState: () => connectionState,
     getConnectionStatus: () =>
       buildWebRtcConnectionStatus(connectionSnapshot, readinessProfile),
@@ -1772,14 +1895,14 @@ export async function connectBrowserVoiceSession(
       const localSync = syncChannel;
       const localPc = asyncOwnsPeerClose ? null : pc;
       const localWs = ws;
-      const localMic = micStream;
       controlChannel = null;
       syncChannel = null;
       if (!asyncOwnsPeerClose) {
         pc = null;
       }
       ws = null;
-      micStream = null;
+      disposeCurrentMic();
+      micRtpSender = null;
       try {
         localControl?.close();
       } catch {
@@ -1822,7 +1945,6 @@ export async function connectBrowserVoiceSession(
           timedOut: false,
         };
       }
-      localMic?.getTracks().forEach((track) => track.stop());
       updateConnectionSnapshot({
         signalingJoined: false,
         peerConnectionState: "closed",
@@ -1865,12 +1987,12 @@ export async function connectBrowserVoiceSession(
         const localSync = syncChannel;
         const localPc = pc;
         const localWs = ws;
-        const localMic = micStream;
         controlChannel = null;
         syncChannel = null;
         pc = null;
         ws = null;
-        micStream = null;
+        disposeCurrentMic();
+        micRtpSender = null;
 
         try {
           localControl?.close();
@@ -1892,7 +2014,6 @@ export async function connectBrowserVoiceSession(
             /* ignore */
           }
         }
-        localMic?.getTracks().forEach((track) => track.stop());
 
         // Never retry native close on a quarantined PC after timed_out/failed.
         const closeTarget =
