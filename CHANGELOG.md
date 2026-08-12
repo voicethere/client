@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## 0.7.27 — 2026-08-12
+
+### Added
+
+- **Mic-optional voice connect** — `connectBrowserVoiceSession` / `connectBrowserSession` no longer fail when `getUserMedia` is denied or unavailable; a silent synthetic outbound audio track keeps WebRTC negotiation alive (`mic_synthetic_fallback` / `mic_denied` / `mic_granted` debug events).
+- **Microphone device APIs** on `BrowserVoiceSession`: `listAudioInputDevices()`, `getAudioInputDeviceId()`, `getAudioInputState()`, `setAudioInputDevice(deviceId)`, `requestAudioInputAccess()` — mid-session switching via `RTCRtpSender.replaceTrack`.
+- **`audioInputDeviceId`** option on connect (`deviceId: { ideal }` for initial GUM).
+- **`client/src/browser/microphone.ts`** helpers exported from `@voicethere/client/browser`.
+
 ## 0.7.26 — 2026-08-05
 
 ### Added
