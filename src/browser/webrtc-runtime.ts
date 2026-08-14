@@ -15,6 +15,15 @@ export type WebRtcRuntime = {
     new (configuration?: RTCConfiguration): RTCPeerConnection;
   };
   getUserMedia?: (constraints: MediaStreamConstraints) => Promise<MediaStream>;
+  /**
+   * How to send the SDP answer after setLocalDescription.
+   * - `trickle-immediate` (default / browser): send immediately; trickle via onicecandidate.
+   *   Chrome starts ICE checks right away; waiting for gathering-complete can lose the ~15–20s race.
+   * - `wait-gathering` (Node runtime): wait until local ICE candidates are in localDescription,
+   *   then send. node-webrtc-rust gathering is fast; production relay-only runners need
+   *   a=candidate in the answer because trickle is not sufficient on this path.
+   */
+  iceAnswerPolicy?: "wait-gathering" | "trickle-immediate";
 };
 
 export function getDefaultBrowserRuntime(): WebRtcRuntime {
