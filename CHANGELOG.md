@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.7.28 — 2026-08-15
+
 ### Fixed
 
 - Node runtime (`createNodeWebRtcRuntime`) waits for ICE gathering (`gatheringComplete` when available) before sending the SDP answer so relay candidates are in the answer. Browser default remains trickle-immediate.
