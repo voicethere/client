@@ -72,6 +72,20 @@ export function remoteOfferHasIceUfrag(
   return /a=ice-ufrag\s*:/i.test(body);
 }
 
+/** Plain JSON session description for signaling (string `sdp`, not a live PC object). */
+export function toSessionDescriptionInit(
+  desc: RTCSessionDescription | RTCSessionDescriptionInit | null,
+): RTCSessionDescriptionInit | null {
+  if (!desc) return null;
+  if (typeof (desc as RTCSessionDescription).toJSON === "function") {
+    return (desc as RTCSessionDescription).toJSON();
+  }
+  return {
+    type: desc.type,
+    sdp: typeof desc.sdp === "string" ? desc.sdp : "",
+  };
+}
+
 function logDcMessage(
   debug: DebugConsole | undefined,
   name: string,
@@ -1209,11 +1223,23 @@ export async function connectBrowserVoiceSession(
       localPc.onicecandidate = (event) => {
         if (!isPcCurrent()) return;
         if (event.candidate) {
-          sendToServer({
-            type: "ice-candidate",
-            targetPeerId: VOICE_AGENT_SERVER_PEER_ID,
-            candidate: event.candidate.toJSON(),
-          });
+          try {
+            const candidate = event.candidate.toJSON?.() ?? {
+              candidate: event.candidate.candidate,
+              sdpMid: event.candidate.sdpMid,
+              sdpMLineIndex: event.candidate.sdpMLineIndex,
+              usernameFragment: event.candidate.usernameFragment,
+            };
+            sendToServer({
+              type: "ice-candidate",
+              targetPeerId: VOICE_AGENT_SERVER_PEER_ID,
+              candidate,
+            });
+          } catch (error: unknown) {
+            const detail =
+              error instanceof Error ? error.message : String(error);
+            debug?.warn("signaling", "ice_candidate_send_failed", detail);
+          }
         }
       };
 
@@ -1321,37 +1347,62 @@ export async function connectBrowserVoiceSession(
       if (!isOfferCurrent() || !isPcCurrent()) return;
       logOfferStep(step);
 
-      // Send the answer immediately — do NOT wait for ICE gathering.
-      // Waiting races TURN CreatePermission on the runner: Chrome starts
-      // connectivity checks right after setLocalDescription, but the runner only
-      // learns our srflx/relay (and installs TURN permissions) after the answer
-      // + trickle candidates arrive. Hosting many host/IPv6/TURN gathers can
-      // delay gathering-complete past Chrome's ICE failure (~15–20s) → every
-      // pair shows STUN sent / 0 responses (relay↔relay included). Trickle
+      const iceAnswerPolicy = runtime.iceAnswerPolicy ?? "trickle-immediate";
+
+      if (iceAnswerPolicy === "wait-gathering") {
+        step = "wait_ice_gathering";
+        const gatherer = localPc as RTCPeerConnection & {
+          gatheringComplete?: () => Promise<void>;
+        };
+        if (typeof gatherer.gatheringComplete === "function") {
+          await gatherer.gatheringComplete();
+        } else {
+          await waitForIceGatheringComplete(localPc);
+        }
+        if (!isOfferCurrent() || !isPcCurrent()) return;
+        logOfferStep(step);
+      }
+
+      // trickle-immediate (browser default): send the answer immediately — do NOT
+      // wait for ICE gathering. Waiting races TURN CreatePermission on the runner:
+      // Chrome starts connectivity checks right after setLocalDescription, but the
+      // runner only learns our srflx/relay (and installs TURN permissions) after the
+      // answer + trickle candidates arrive. Hosting many host/IPv6/TURN gathers can
+      // delay gathering-complete past Chrome's ICE failure (~15–20s) → every pair
+      // shows STUN sent / 0 responses (relay↔relay included). Trickle
       // `onicecandidate` already ships candidates; the runner queues them until
       // setRemoteDescription(answer).
       step = "send_answer";
+      const answerSdp = toSessionDescriptionInit(localPc.localDescription);
+      if (!answerSdp) {
+        throw new Error(
+          "set_local_description produced no localDescription for answer",
+        );
+      }
       sendToServer({
         type: "answer",
         targetPeerId: VOICE_AGENT_SERVER_PEER_ID,
-        sdp: localPc.localDescription,
+        sdp: answerSdp,
       });
       debug?.info("signaling", "answer_sent");
       logOfferStep(step);
       startIceStuckWatch(localPc, isPcCurrent);
 
-      // Best-effort: surface gather completion in debug logs (non-blocking).
-      void waitForIceGatheringComplete(localPc)
-        .then(() => {
-          if (!isOfferCurrent() || !isPcCurrent()) return;
-          debug?.info("webrtc", "ice_gathering_complete");
-          logOfferStep("wait_ice_gathering");
-        })
-        .catch((error: unknown) => {
-          if (!isOfferCurrent() || !isPcCurrent()) return;
-          const detail = error instanceof Error ? error.message : String(error);
-          debug?.warn("webrtc", "ice_gathering_wait_failed", detail);
-        });
+      if (iceAnswerPolicy === "trickle-immediate") {
+        // Best-effort: surface gather completion in debug logs (non-blocking).
+        void waitForIceGatheringComplete(localPc)
+          .then(() => {
+            if (!isOfferCurrent() || !isPcCurrent()) return;
+            debug?.info("webrtc", "ice_gathering_complete");
+            logOfferStep("wait_ice_gathering");
+          })
+          .catch((error: unknown) => {
+            if (!isOfferCurrent() || !isPcCurrent()) return;
+            const detail =
+              error instanceof Error ? error.message : String(error);
+            debug?.warn("webrtc", "ice_gathering_wait_failed", detail);
+          });
+      }
     } catch (error: unknown) {
       if (!isOfferCurrent()) return;
       const detail = error instanceof Error ? error.message : String(error);

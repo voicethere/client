@@ -15,6 +15,7 @@ export function createNodeWebRtcRuntime(): WebRtcRuntime {
     WebSocket: NodeWebSocketAdapter as unknown as WebRtcRuntime["WebSocket"],
     RTCPeerConnection:
       RTCPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+    iceAnswerPolicy: "wait-gathering",
     getUserMedia: async (_constraints) => {
       const track = new LocalAudioTrack("mic", "mic-stream");
       const stream = new MediaStream([track]);

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   connectBrowserVoiceSession,
   remoteOfferHasIceUfrag,
+  toSessionDescriptionInit,
   VOICE_AGENT_SERVER_PEER_ID,
 } from "./browser-voice-session.js";
 import type { SessionErrorEvent } from "../session-errors.js";
@@ -87,12 +88,47 @@ class MockPeerConnection {
   }
 }
 
-function mockRuntime(): WebRtcRuntime {
+/** Simulates nwr: setLocalDescription snapshots SDP before gather; gatheringComplete refreshes it. */
+class WaitGatheringMockPeerConnection extends MockPeerConnection {
+  async setLocalDescription(
+    description: RTCSessionDescriptionInit,
+  ): Promise<void> {
+    this.localDescription = description;
+    this.iceGatheringState = "gathering";
+  }
+
+  async gatheringComplete(): Promise<void> {
+    await Promise.resolve();
+    const baseSdp =
+      typeof this.localDescription?.sdp === "string"
+        ? this.localDescription.sdp
+        : "";
+    this.localDescription = {
+      type: this.localDescription?.type ?? "answer",
+      sdp: `${baseSdp}a=candidate:1 1 UDP 2130706431 10.0.0.1 3478 typ relay\r\n`,
+    };
+    this.iceGatheringState = "complete";
+    this.onicegatheringstatechange?.();
+  }
+}
+
+function mockRuntime(
+  overrides: Partial<WebRtcRuntime> = {},
+): WebRtcRuntime {
   return {
     WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
     RTCPeerConnection:
       MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+    ...overrides,
   };
+}
+
+function mockWaitGatheringRuntime(): WebRtcRuntime {
+  return mockRuntime({
+    iceAnswerPolicy: "wait-gathering",
+    RTCPeerConnection:
+      WaitGatheringMockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+  });
 }
 
 const baseCredentials = {
@@ -104,6 +140,32 @@ const baseCredentials = {
   ice_servers: [] as RTCIceServer[],
   expires_at: new Date(Date.now() + 60_000).toISOString(),
 };
+
+describe("toSessionDescriptionInit", () => {
+  it("returns plain { type, sdp } from RTCSessionDescriptionInit", () => {
+    expect(
+      toSessionDescriptionInit({ type: "answer", sdp: "v=0\r\na=ice-ufrag:x\r\n" }),
+    ).toEqual({ type: "answer", sdp: "v=0\r\na=ice-ufrag:x\r\n" });
+  });
+
+  it("uses toJSON when present on RTCSessionDescription", () => {
+    const desc = {
+      type: "answer" as RTCSdpType,
+      sdp: "v=0\r\n",
+      toJSON() {
+        return { type: "answer" as RTCSdpType, sdp: "v=0\r\nfrom-json\r\n" };
+      },
+    };
+    expect(toSessionDescriptionInit(desc as RTCSessionDescription)).toEqual({
+      type: "answer",
+      sdp: "v=0\r\nfrom-json\r\n",
+    });
+  });
+
+  it("returns null for null input", () => {
+    expect(toSessionDescriptionInit(null)).toBeNull();
+  });
+});
 
 describe("remoteOfferHasIceUfrag", () => {
   it("accepts offers with a=ice-ufrag", () => {
@@ -228,12 +290,12 @@ describe("connectBrowserVoiceSession offer handler", () => {
       credentials: baseCredentials,
       requestMic: false,
       readiness: "data",
-      runtime: mockRuntime(),
+      runtime: mockRuntime({ iceAnswerPolicy: "trickle-immediate" }),
       reconnectPolicy: "new-session",
     });
 
     const ws = MockWebSocket.instances[0];
-    // Keep gathering incomplete after setLocalDescription — old code blocked answer.
+    // Keep gathering incomplete after setLocalDescription — trickle-immediate must still answer.
     const originalSetLocal = MockPeerConnection.prototype.setLocalDescription;
     MockPeerConnection.prototype.setLocalDescription = async function (
       description: RTCSessionDescriptionInit,
@@ -256,12 +318,63 @@ describe("connectBrowserVoiceSession offer handler", () => {
       expect(ws.sent.some((frame) => JSON.parse(frame).type === "answer")).toBe(
         true,
       );
+      const answerFrame = JSON.parse(
+        ws.sent.find((frame) => JSON.parse(frame).type === "answer")!,
+      );
+      expect(answerFrame.sdp).toEqual({
+        type: "answer",
+        sdp: "v=0\r\na=ice-ufrag:local\r\n",
+      });
+      expect(typeof answerFrame.sdp.sdp).toBe("string");
       const pc = MockPeerConnection.instances[0];
       expect(pc.iceGatheringState).toBe("gathering");
     } finally {
       MockPeerConnection.prototype.setLocalDescription = originalSetLocal;
       session.disconnect();
     }
+  });
+
+  it("wait-gathering waits until gathering completes before sending answer", async () => {
+    const session = await connectBrowserVoiceSession({
+      credentials: {
+        ...baseCredentials,
+        session_id: "session-wait-gathering",
+        room_id: "room-wait-gathering",
+      },
+      requestMic: false,
+      readiness: "data",
+      runtime: mockWaitGatheringRuntime(),
+      reconnectPolicy: "new-session",
+    });
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.onmessage?.({
+      data: JSON.stringify({
+        type: "offer",
+        peerId: VOICE_AGENT_SERVER_PEER_ID,
+        sdp: { type: "offer", sdp: "v=0\r\na=ice-ufrag:server\r\n" },
+      }),
+    });
+    await Promise.resolve();
+
+    expect(ws.sent.some((frame) => JSON.parse(frame).type === "answer")).toBe(
+      false,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const answerFrame = JSON.parse(
+      ws.sent.find((frame) => JSON.parse(frame).type === "answer")!,
+    );
+    expect(answerFrame.sdp).toEqual({
+      type: "answer",
+      sdp: "v=0\r\na=ice-ufrag:local\r\na=candidate:1 1 UDP 2130706431 10.0.0.1 3478 typ relay\r\n",
+    });
+    expect(typeof answerFrame.sdp.sdp).toBe("string");
+    expect(answerFrame.sdp.sdp).toMatch(/a=candidate/);
+    expect(answerFrame.sdp.sdp).toMatch(/typ relay/);
+
+    session.disconnect();
   });
 
   it("serializes overlapping offers so only the latest generation sends an answer", async () => {
