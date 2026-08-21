@@ -362,6 +362,28 @@ describe("startSession POST /sessions 429", () => {
     vi.restoreAllMocks();
   });
 
+  it("does not send X-Project-Id on POST /sessions", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      text: async () => "capacity",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await startSession({
+      apiBase: "https://sessions.example/v1",
+      projectId: PROJECT_ID,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0] as [
+      string,
+      { headers: Record<string, string> },
+    ];
+    expect(init.headers["X-Project-Id"]).toBeUndefined();
+    expect(init.headers["Content-Type"]).toBe("application/json");
+  });
+
   it("returns MONTHLY_USAGE_EXCEEDED when API body says NWRTC_MONTHLY_USAGE_EXCEEDED", async () => {
     const body = JSON.stringify({
       error: {
