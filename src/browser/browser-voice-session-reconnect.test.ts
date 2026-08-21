@@ -6,6 +6,7 @@ import {
   VOICE_AGENT_SERVER_PEER_ID,
   VOICE_CONTROL_CHANNEL_LABEL,
   VOICE_SYNC_CHANNEL_LABEL,
+  type VoiceSessionReconnectInfo,
 } from "./browser-voice-session.js";
 import type { WebRtcRuntime } from "./webrtc-runtime.js";
 
@@ -736,5 +737,115 @@ describe("connectBrowserVoiceSession ICE recovery (relay)", () => {
     expect(MockPeerConnection.instances[0].config?.iceTransportPolicy).toBe(
       "all",
     );
+  });
+
+  it("passes reconnect reason and iceTransportPolicy to onIceRecovery and onReconnecting", async () => {
+    vi.useFakeTimers();
+
+    const runtime: WebRtcRuntime = {
+      WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
+      RTCPeerConnection:
+        MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+    };
+
+    const iceRecoveryInfo: VoiceSessionReconnectInfo[] = [];
+    const reconnectingInfo: VoiceSessionReconnectInfo[] = [];
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: false,
+      readiness: "data",
+      runtime,
+      iceTransportPolicy: "all",
+      maxIceRecoveryAttempts: 1,
+      maxAutoReconnectAttempts: 2,
+      onIceRecovery: (_attempt, info) => {
+        if (info) iceRecoveryInfo.push(info);
+      },
+      onReconnecting: (_attempt, info) => {
+        if (info) reconnectingInfo.push(info);
+      },
+    });
+
+    sendOffer(MockWebSocket.instances[0]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    MockPeerConnection.instances[0].fail();
+    await Promise.resolve();
+
+    expect(iceRecoveryInfo).toEqual([
+      { reason: "webrtc_failed", iceTransportPolicy: "relay" },
+    ]);
+    expect(reconnectingInfo).toEqual([]);
+
+    MockPeerConnection.nextOptions = { failOnConnect: false };
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await Promise.resolve();
+    await Promise.resolve();
+    MockPeerConnection.instances.at(-1)!.fail();
+    await Promise.resolve();
+
+    expect(reconnectingInfo).toEqual([
+      { reason: "webrtc_failed", iceTransportPolicy: "relay" },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await Promise.resolve();
+    await Promise.resolve();
+    openDataChannels(MockPeerConnection.instances.at(-1)!);
+    await session.waitForConnected(10_000);
+  });
+
+  it("onReconnected receives last reconnect reason after auto-reconnect", async () => {
+    vi.useFakeTimers();
+
+    const runtime: WebRtcRuntime = {
+      WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
+      RTCPeerConnection:
+        MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+    };
+
+    const reconnectedInfo: VoiceSessionReconnectInfo[] = [];
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: false,
+      readiness: "data",
+      runtime,
+      maxAutoReconnectAttempts: 2,
+      maxIceRecoveryAttempts: 0,
+      onReconnected: (_attempt, info) => {
+        if (info) reconnectedInfo.push(info);
+      },
+    });
+
+    sendOffer(MockWebSocket.instances[0]);
+    await Promise.resolve();
+    await Promise.resolve();
+    openDataChannels(MockPeerConnection.instances[0]);
+    await session.waitForConnected(1_000);
+
+    const pending = session.waitForConnected(10_000);
+    MockPeerConnection.instances[0].fail();
+    await Promise.resolve();
+
+    MockPeerConnection.nextOptions = { failOnConnect: false };
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await Promise.resolve();
+    await Promise.resolve();
+    openDataChannels(MockPeerConnection.instances.at(-1)!);
+    await pending;
+
+    expect(reconnectedInfo).toEqual([
+      { reason: "webrtc_failed", iceTransportPolicy: undefined },
+    ]);
   });
 });
