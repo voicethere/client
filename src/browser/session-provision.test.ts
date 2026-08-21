@@ -362,7 +362,7 @@ describe("startSession POST /sessions 429", () => {
     vi.restoreAllMocks();
   });
 
-  it("sends X-Project-Id on POST /sessions for CORS preflight", async () => {
+  it("does not send X-Project-Id on POST /sessions", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,
       status: 429,
@@ -380,7 +380,8 @@ describe("startSession POST /sessions 429", () => {
       string,
       { headers: Record<string, string> },
     ];
-    expect(init.headers["X-Project-Id"]).toBe(PROJECT_ID);
+    expect(init.headers["X-Project-Id"]).toBeUndefined();
+    expect(init.headers["Content-Type"]).toBe("application/json");
   });
 
   it("returns MONTHLY_USAGE_EXCEEDED when API body says NWRTC_MONTHLY_USAGE_EXCEEDED", async () => {

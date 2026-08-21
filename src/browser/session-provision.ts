@@ -170,7 +170,6 @@ export async function startSession(
   const apiBase = options.apiBase.replace(/\/$/, "");
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    "X-Project-Id": options.projectId,
     ...options.headers,
   };
 
