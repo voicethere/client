@@ -362,6 +362,27 @@ describe("startSession POST /sessions 429", () => {
     vi.restoreAllMocks();
   });
 
+  it("sends X-Project-Id on POST /sessions for CORS preflight", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      text: async () => "capacity",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await startSession({
+      apiBase: "https://sessions.example/v1",
+      projectId: PROJECT_ID,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0] as [
+      string,
+      { headers: Record<string, string> },
+    ];
+    expect(init.headers["X-Project-Id"]).toBe(PROJECT_ID);
+  });
+
   it("returns MONTHLY_USAGE_EXCEEDED when API body says NWRTC_MONTHLY_USAGE_EXCEEDED", async () => {
     const body = JSON.stringify({
       error: {
