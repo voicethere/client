@@ -39,6 +39,8 @@ export type ConnectBrowserSessionOptions = {
   onDiagnosticEvent?: BrowserVoiceSessionOptions["onDiagnosticEvent"];
   /** Preferred audio input device for voice / voice+data sessions. */
   audioInputDeviceId?: string;
+  /** Fired when inbound agent audio playback starts or is blocked by the browser. */
+  onAudioPlayback?: BrowserVoiceSessionOptions["onAudioPlayback"];
 };
 
 export type BrowserSession = BrowserVoiceSession & {
@@ -97,6 +99,7 @@ export async function connectBrowserSession(
     iceTransportPolicy: options.iceTransportPolicy,
     onDiagnosticEvent: options.onDiagnosticEvent,
     audioInputDeviceId: requestMic ? options.audioInputDeviceId : undefined,
+    onAudioPlayback: options.onAudioPlayback,
   });
 
   return { ...session, mode: resolvedMode };
@@ -222,3 +225,8 @@ export {
   type AudioInputDevice,
   type AudioInputState,
 } from "./microphone.js";
+export {
+  createHiddenAudioElement,
+  unlockAudioPlayback,
+  type AudioPlaybackState,
+} from "./audio-playback.js";

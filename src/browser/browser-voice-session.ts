@@ -52,6 +52,13 @@ import {
   listAudioInputDevices as listBrowserAudioInputDevices,
   type AudioInputState,
 } from "./microphone.js";
+import {
+  createHiddenAudioElement,
+  unlockAudioPlayback as unlockAudioPlaybackElement,
+  type AudioPlaybackState,
+} from "./audio-playback.js";
+
+export type { AudioPlaybackState } from "./audio-playback.js";
 
 /** High-rate DC traffic logged at debug level — E2E stderr needs `LOAD_TEST_CLIENT_DEBUG=1`. */
 const HIGH_FREQUENCY_DC_TYPES = new Set([
@@ -218,6 +225,8 @@ export type BrowserVoiceSessionOptions = {
   readiness?: WebRtcReadinessProfile;
   /** Fired whenever WebRTC connection readiness changes (signaling through media/DCs). */
   onConnectionStatus?: (status: WebRtcConnectionStatus) => void;
+  /** Fired when inbound agent audio playback starts or is blocked by the browser. */
+  onAudioPlayback?: (state: AudioPlaybackState) => void;
 };
 
 export type BrowserVoiceSession = {
@@ -259,6 +268,13 @@ export type BrowserVoiceSession = {
    * success; false keeps the current (possibly synthetic) stream.
    */
   requestAudioInputAccess: () => Promise<boolean>;
+  /** Inbound agent audio playback state (`idle` until first ontrack play attempt). */
+  getAudioPlaybackState: () => AudioPlaybackState;
+  /**
+   * Retry playback on the attached audio element (call from a user gesture when
+   * {@link getAudioPlaybackState} is `blocked`).
+   */
+  unlockAudioPlayback: () => Promise<boolean>;
   /**
    * Resolves when the session meets the readiness profile (voice: PC + inbound/outbound
    * audio tracks; data: PC + both data channels open) or rejects on timeout/failure.
@@ -384,6 +400,36 @@ export async function connectBrowserVoiceSession(
   let audioInputState: AudioInputState = "synthetic";
   let audioInputDeviceId: string | null = null;
   let disposeMicHandle: (() => void) | null = null;
+  const ownedAudioElement =
+    options.requestMic !== false && !options.audioElement
+      ? createHiddenAudioElement()
+      : null;
+  const playbackAudioElement = options.audioElement ?? ownedAudioElement;
+  let audioPlaybackState: AudioPlaybackState = "idle";
+  const disposeOwnedAudioElement = (): void => {
+    if (!ownedAudioElement) return;
+    try {
+      ownedAudioElement.pause();
+      ownedAudioElement.srcObject = null;
+      ownedAudioElement.remove();
+    } catch {
+      /* ignore */
+    }
+  };
+  const setAudioPlaybackState = (state: AudioPlaybackState): void => {
+    audioPlaybackState = state;
+    options.onAudioPlayback?.(state);
+  };
+  const attemptInboundAudioPlayback = async (): Promise<void> => {
+    if (!playbackAudioElement) return;
+    const ok = await unlockAudioPlaybackElement(playbackAudioElement);
+    if (ok) {
+      setAudioPlaybackState("playing");
+    } else {
+      debug?.warn("webrtc", "audio_playback_blocked");
+      setAudioPlaybackState("blocked");
+    }
+  };
   /** ICE candidates queued by negotiation generation until that PC is ready. */
   const pendingIceByGeneration = new Map<number, RTCIceCandidateInit[]>();
   let connectionState: RTCPeerConnectionState | "new" = "new";
@@ -1217,9 +1263,9 @@ export async function connectBrowserVoiceSession(
         if (!isPcCurrent()) return;
         if (event.track.kind !== "audio") return;
         const stream = event.streams[0] ?? new MediaStream([event.track]);
-        if (options.audioElement) {
-          options.audioElement.srcObject = stream;
-          void options.audioElement.play().catch(() => undefined);
+        if (playbackAudioElement) {
+          playbackAudioElement.srcObject = stream;
+          void attemptInboundAudioPlayback();
         }
         options.onAgentAudioTrack?.(event.track);
         updateConnectionSnapshot({ inboundAudioTrack: true });
@@ -1876,6 +1922,18 @@ export async function connectBrowserVoiceSession(
     },
     requestAudioInputAccess: async () =>
       switchAudioInput(audioInputDeviceId, { reRequest: true }),
+    getAudioPlaybackState: () => audioPlaybackState,
+    unlockAudioPlayback: async () => {
+      if (!playbackAudioElement) return false;
+      const ok = await unlockAudioPlaybackElement(playbackAudioElement);
+      if (ok) {
+        setAudioPlaybackState("playing");
+      } else {
+        debug?.warn("webrtc", "audio_playback_blocked");
+        setAudioPlaybackState("blocked");
+      }
+      return ok;
+    },
     getConnectionState: () => connectionState,
     getConnectionStatus: () =>
       buildWebRtcConnectionStatus(connectionSnapshot, readinessProfile),
@@ -1970,6 +2028,7 @@ export async function connectBrowserVoiceSession(
       }
       ws = null;
       disposeCurrentMic();
+      disposeOwnedAudioElement();
       micRtpSender = null;
       try {
         localControl?.close();
@@ -2060,6 +2119,7 @@ export async function connectBrowserVoiceSession(
         pc = null;
         ws = null;
         disposeCurrentMic();
+        disposeOwnedAudioElement();
         micRtpSender = null;
 
         try {
