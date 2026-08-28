@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Inbound audio playback helpers** — `audio-playback.ts` exports `AudioPlaybackState`, `unlockAudioPlayback()`, and `createHiddenAudioElement()`. Voice sessions auto-create a hidden `<audio>` element when none is supplied; `getAudioPlaybackState()` and `unlockAudioPlayback()` expose autoplay-blocked state.
+- **Embed widget mic notice** — After voice connect with denied/unavailable/synthetic microphone, the embed shows an amber notice and **Request microphone** button. **Tap to enable sound** appears when inbound playback is blocked.
+
+### Fixed
+
+- **Embed inbound agent audio** — The embed widget now passes a hidden `<audio>` element and unlocks playback on Connect click so agent TTS can play without a live microphone.
+
 ### Changed
 
 - **Reconnect callbacks** — `onIceRecovery`, `onReconnecting`, and `onReconnected` accept an optional 2nd arg `VoiceSessionReconnectInfo` (`reason`, effective `iceTransportPolicy`) for E2E/load-test diagnostics.

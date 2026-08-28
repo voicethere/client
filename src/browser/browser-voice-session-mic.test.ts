@@ -274,4 +274,107 @@ describe("connectBrowserVoiceSession microphone APIs", () => {
     expect(session.getAudioInputState()).toBe("live");
     expect(session.getAudioInputDeviceId()).toBe("granted-mic");
   });
+
+  it("plays inbound audio on ontrack when audioElement play resolves", async () => {
+    MockWebSocket.instances = [];
+    MockPeerConnection.instances = [];
+
+    const remoteTrack = {
+      kind: "audio",
+      readyState: "live",
+    } as MediaStreamTrack;
+    const remoteStream = {
+      id: "remote",
+      getAudioTracks: () => [remoteTrack],
+    } as MediaStream;
+
+    const audioElement = {
+      srcObject: null as MediaStream | null,
+      play: vi.fn(async () => undefined),
+    } as unknown as HTMLAudioElement;
+
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: true,
+      readiness: "data",
+      runtime: createDeniedMicRuntime(),
+      audioElement,
+    });
+
+    expect(session.getAudioInputState()).toBe("denied");
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.onmessage?.({
+      data: JSON.stringify({
+        type: "offer",
+        peerId: VOICE_AGENT_SERVER_PEER_ID,
+        sdp: { type: "offer", sdp: "v=0\na=ice-ufrag:abc\n" },
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const pc = MockPeerConnection.instances[0]!;
+    pc.ontrack?.({
+      track: remoteTrack,
+      streams: [remoteStream],
+    } as RTCTrackEvent);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(audioElement.srcObject).toBe(remoteStream);
+    expect(audioElement.play).toHaveBeenCalled();
+    expect(session.getAudioPlaybackState()).toBe("playing");
+  });
+
+  it("reports blocked playback when audioElement play rejects", async () => {
+    MockWebSocket.instances = [];
+    MockPeerConnection.instances = [];
+
+    const remoteTrack = {
+      kind: "audio",
+      readyState: "live",
+    } as MediaStreamTrack;
+    const remoteStream = {
+      id: "remote",
+      getAudioTracks: () => [remoteTrack],
+    } as MediaStream;
+
+    const onAudioPlayback = vi.fn();
+    const audioElement = {
+      srcObject: null as MediaStream | null,
+      play: vi.fn(async () => {
+        throw new DOMException("blocked", "NotAllowedError");
+      }),
+    } as unknown as HTMLAudioElement;
+
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: true,
+      readiness: "data",
+      runtime: createDeniedMicRuntime(),
+      audioElement,
+      onAudioPlayback,
+    });
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.onmessage?.({
+      data: JSON.stringify({
+        type: "offer",
+        peerId: VOICE_AGENT_SERVER_PEER_ID,
+        sdp: { type: "offer", sdp: "v=0\na=ice-ufrag:abc\n" },
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const pc = MockPeerConnection.instances[0]!;
+    pc.ontrack?.({
+      track: remoteTrack,
+      streams: [remoteStream],
+    } as RTCTrackEvent);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(session.getAudioPlaybackState()).toBe("blocked");
+    expect(onAudioPlayback).toHaveBeenCalledWith("blocked");
+  });
 });

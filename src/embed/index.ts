@@ -3,9 +3,11 @@ import {
   connectBrowserSession,
   createDebugConsole,
   startSession,
+  unlockAudioPlayback,
   type BrowserSessionMode,
   type WebRtcConnectionStatus,
 } from "../browser/browser-session.js";
+import type { AudioInputState } from "../browser/microphone.js";
 
 export type VoiceThereWidgetTheme = {
   primary?: string;
@@ -48,6 +50,17 @@ function formatWebRtcStatus(status: WebRtcConnectionStatus): string {
     default:
       return "Connecting…";
   }
+}
+
+function isMicLimitedState(state: AudioInputState): boolean {
+  return state === "denied" || state === "unavailable" || state === "synthetic";
+}
+
+function isVoiceSessionMode(mode: BrowserSessionMode): boolean {
+  return (
+    mode === BrowserSessionModeType.Voice ||
+    mode === BrowserSessionModeType.VoiceAndData
+  );
 }
 
 export function createVoiceThereWidget(
@@ -118,6 +131,80 @@ export function createVoiceThereWidget(
     statusSpinner.style.display = loading ? "inline-block" : "none";
   };
 
+  const inboundAudio = document.createElement("audio");
+  inboundAudio.autoplay = true;
+  inboundAudio.setAttribute("playsinline", "");
+  inboundAudio.style.display = "none";
+
+  const micWarning = document.createElement("div");
+  micWarning.setAttribute("data-voicethere-mic-warning", "");
+  micWarning.style.display = "none";
+  micWarning.style.fontSize = "11px";
+  micWarning.style.lineHeight = "1.4";
+  micWarning.style.marginBottom = "8px";
+  micWarning.style.padding = "8px";
+  micWarning.style.borderRadius = "8px";
+  micWarning.style.background = "rgba(245, 158, 11, 0.15)";
+  micWarning.style.border = "1px solid rgba(245, 158, 11, 0.35)";
+  micWarning.style.color = "#fcd34d";
+  micWarning.textContent =
+    "Microphone permission was denied or unavailable (nested iframes / in-app browsers often hide the prompt). Session is connected. You can still hear the agent if the browser allows playback. Grant microphone access to speak.";
+
+  const micRequestBtn = document.createElement("button");
+  micRequestBtn.setAttribute("data-voicethere-mic-request", "");
+  micRequestBtn.type = "button";
+  micRequestBtn.textContent = "Request microphone";
+  micRequestBtn.style.marginTop = "6px";
+  micRequestBtn.style.padding = "6px 10px";
+  micRequestBtn.style.borderRadius = "6px";
+  micRequestBtn.style.border = "none";
+  micRequestBtn.style.background = theme.primary ?? "#06b6d4";
+  micRequestBtn.style.color = theme.text ?? "#0f172a";
+  micRequestBtn.style.cursor = "pointer";
+  micRequestBtn.style.fontSize = "11px";
+  micWarning.append(micRequestBtn);
+
+  const playbackWarning = document.createElement("div");
+  playbackWarning.setAttribute("data-voicethere-playback-warning", "");
+  playbackWarning.style.display = "none";
+  playbackWarning.style.fontSize = "11px";
+  playbackWarning.style.lineHeight = "1.4";
+  playbackWarning.style.marginBottom = "8px";
+  playbackWarning.style.padding = "8px";
+  playbackWarning.style.borderRadius = "8px";
+  playbackWarning.style.background = "rgba(245, 158, 11, 0.15)";
+  playbackWarning.style.border = "1px solid rgba(245, 158, 11, 0.35)";
+  playbackWarning.style.color = "#fcd34d";
+  playbackWarning.textContent = "Tap to enable sound.";
+
+  const playbackEnableBtn = document.createElement("button");
+  playbackEnableBtn.setAttribute("data-voicethere-playback-enable", "");
+  playbackEnableBtn.type = "button";
+  playbackEnableBtn.textContent = "Enable sound";
+  playbackEnableBtn.style.marginTop = "6px";
+  playbackEnableBtn.style.padding = "6px 10px";
+  playbackEnableBtn.style.borderRadius = "6px";
+  playbackEnableBtn.style.border = "none";
+  playbackEnableBtn.style.background = theme.primary ?? "#06b6d4";
+  playbackEnableBtn.style.color = theme.text ?? "#0f172a";
+  playbackEnableBtn.style.cursor = "pointer";
+  playbackEnableBtn.style.fontSize = "11px";
+  playbackWarning.append(playbackEnableBtn);
+
+  const hideSessionNotices = () => {
+    micWarning.style.display = "none";
+    playbackWarning.style.display = "none";
+  };
+
+  const refreshMicNotice = () => {
+    if (!session || !isVoiceSessionMode(session.mode)) {
+      micWarning.style.display = "none";
+      return;
+    }
+    const micState = session.getAudioInputState();
+    micWarning.style.display = isMicLimitedState(micState) ? "block" : "none";
+  };
+
   const log = document.createElement("pre");
   log.style.flex = "1";
   log.style.overflow = "auto";
@@ -149,8 +236,15 @@ export function createVoiceThereWidget(
   connectBtn.style.color = theme.text ?? "#0f172a";
   connectBtn.style.cursor = "pointer";
 
-  panel.append(status, log, input, connectBtn);
-  root.append(launcher, panel);
+  panel.append(
+    status,
+    micWarning,
+    playbackWarning,
+    log,
+    input,
+    connectBtn,
+  );
+  root.append(launcher, panel, inboundAudio);
   mount.append(root);
 
   let session: Awaited<ReturnType<typeof connectBrowserSession>> | null = null;
@@ -161,13 +255,36 @@ export function createVoiceThereWidget(
 
   const debug = createDebugConsole(() => renderLog());
 
+  micRequestBtn.onclick = () => {
+    void (async () => {
+      if (!session) return;
+      await session.requestAudioInputAccess();
+      refreshMicNotice();
+      renderLog();
+    })();
+  };
+
+  playbackEnableBtn.onclick = () => {
+    void (async () => {
+      if (!session) return;
+      const ok = await session.unlockAudioPlayback();
+      if (ok) {
+        playbackWarning.style.display = "none";
+      }
+      renderLog();
+    })();
+  };
+
   connectBtn.onclick = () => {
+    void unlockAudioPlayback(inboundAudio);
     void (async () => {
       if (session) {
         session.disconnect();
         session = null;
+        hideSessionNotices();
         setStatusDisplay("Disconnected");
         connectBtn.textContent = "Connect";
+        connectBtn.title = "";
         return;
       }
 
@@ -198,6 +315,7 @@ export function createVoiceThereWidget(
       session = await connectBrowserSession({
         mode,
         credentials: started.credentials,
+        audioElement: inboundAudio,
         onDebugEvent: debug,
         onConnectionStatus: (connectionStatus) => {
           setStatusDisplay(formatWebRtcStatus(connectionStatus));
@@ -205,10 +323,15 @@ export function createVoiceThereWidget(
         onReconnecting: (attempt) => {
           setStatusDisplay(`Reconnecting (${attempt})…`, true);
         },
+        onAudioPlayback: (playbackState) => {
+          playbackWarning.style.display =
+            playbackState === "blocked" ? "block" : "none";
+        },
       });
 
       await session.waitForConnected();
       setStatusDisplay(formatWebRtcStatus(session.getConnectionStatus()));
+      refreshMicNotice();
       connectBtn.textContent = "Disconnect";
       connectBtn.title =
         "Disconnect this session. Connect again to start a new orchestrator session.";
@@ -238,6 +361,7 @@ export function createVoiceThereWidget(
     },
     destroy: () => {
       session?.disconnect();
+      inboundAudio.remove();
       root.remove();
     },
   };
