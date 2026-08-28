@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.7.29 — 2026-08-28
+
 ### Added
 
 - **Inbound audio playback helpers** — `audio-playback.ts` exports `AudioPlaybackState`, `unlockAudioPlayback()`, and `createHiddenAudioElement()`. Voice sessions auto-create a hidden `<audio>` element when none is supplied; `getAudioPlaybackState()` and `unlockAudioPlayback()` expose autoplay-blocked state.
