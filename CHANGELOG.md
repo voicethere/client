@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Audio visualizer idle frame** — `attachAudioVisualizer().stop()` and ended MediaStream tracks now clear the canvas and draw a flat midline instead of freezing on the last analyser snapshot.
+
 ## 0.7.29 — 2026-08-28
 
 ### Added
