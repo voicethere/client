@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Embed presets and CDN config** — `createVoiceThereWidget` supports `preset`, `position`, `launcherLabel`, and `greeting`. Brand `theme` colors overlay preset defaults. `createVoiceThereWidgetAsync` loads appearance from `configUrl` (no credentials); inline options override fetched JSON. Published config schema `VoiceThereWidgetConfigV1` rejects secret-like keys (`clientKey`, `token`, etc.). Presets: `pill-dark`, `pill-light`, `rounded-card`, `minimal-bar`, `voice-orb`.
+
 ### Fixed
 
 - **Audio visualizer idle frame** — `attachAudioVisualizer().stop()` and ended MediaStream tracks now clear the canvas and draw a flat midline instead of freezing on the last analyser snapshot.
