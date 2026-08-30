@@ -111,7 +111,7 @@ export function attachAudioVisualizer(
     rafId = requestAnimationFrame(draw);
 
     const tappedStream = getTappedMediaStream(mediaStream, audioElement);
-    if (!hasLiveAudioTrack(tappedStream)) {
+    if (tappedStream !== null && !hasLiveAudioTrack(tappedStream)) {
       drawIdleVisualizer(ctx, canvas, waveColor);
       return;
     }

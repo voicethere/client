@@ -49,6 +49,11 @@ function createMockMediaStream(trackReadyState: MediaStreamTrackState): MediaStr
 }
 
 function installAudioContextMock(): void {
+  vi.stubGlobal(
+    "MediaStream",
+    class MediaStream {},
+  );
+
   const analyser = {
     fftSize: 2048,
     smoothingTimeConstant: 0.75,
@@ -132,5 +137,17 @@ describe("attachAudioVisualizer", () => {
     expect(ctx.moveTo).toHaveBeenCalledWith(0, canvas.height / 2);
     expect(ctx.lineTo).toHaveBeenCalledWith(canvas.width, canvas.height / 2);
     expect(ctx.fillRectCalls).toBe(0);
+  });
+
+  it("uses analyser bars for audioElement without a MediaStream srcObject", () => {
+    const { canvas, ctx } = createMockCanvas();
+    const audioElement = {
+      srcObject: null,
+      addEventListener: vi.fn(),
+    } as unknown as HTMLAudioElement;
+
+    attachAudioVisualizer({ canvas, audioElement });
+
+    expect(ctx.fillRectCalls).toBeGreaterThan(0);
   });
 });
