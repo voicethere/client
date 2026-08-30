@@ -11,6 +11,38 @@ export type AudioVisualizer = {
   resume: () => void;
 };
 
+export function drawIdleVisualizer(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  waveColor = "#38bdf8",
+): void {
+  const width = canvas.width;
+  const height = canvas.height;
+  ctx.clearRect(0, 0, width, height);
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = waveColor;
+  ctx.beginPath();
+  ctx.moveTo(0, height / 2);
+  ctx.lineTo(width, height / 2);
+  ctx.stroke();
+}
+
+function getTappedMediaStream(
+  mediaStream?: MediaStream,
+  audioElement?: HTMLAudioElement,
+): MediaStream | null {
+  if (mediaStream) return mediaStream;
+  if (audioElement?.srcObject instanceof MediaStream) {
+    return audioElement.srcObject;
+  }
+  return null;
+}
+
+function hasLiveAudioTrack(stream: MediaStream | null): boolean {
+  if (!stream) return false;
+  return stream.getAudioTracks().some((track) => track.readyState === "live");
+}
+
 export function attachAudioVisualizer(
   options: AudioVisualizerOptions,
 ): AudioVisualizer {
@@ -78,6 +110,12 @@ export function attachAudioVisualizer(
     if (stopped) return;
     rafId = requestAnimationFrame(draw);
 
+    const tappedStream = getTappedMediaStream(mediaStream, audioElement);
+    if (!hasLiveAudioTrack(tappedStream)) {
+      drawIdleVisualizer(ctx, canvas, waveColor);
+      return;
+    }
+
     const width = canvas.width;
     const height = canvas.height;
     ctx.clearRect(0, 0, width, height);
@@ -113,6 +151,7 @@ export function attachAudioVisualizer(
     stop: () => {
       stopped = true;
       cancelAnimationFrame(rafId);
+      drawIdleVisualizer(ctx, canvas, waveColor);
       void audioCtx.close();
     },
     resume: ensureRunning,
