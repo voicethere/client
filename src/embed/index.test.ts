@@ -15,11 +15,16 @@ vi.mock("../browser/browser-session.js", async (importOriginal) => {
 });
 
 import { BrowserSessionModeType } from "../browser/browser-session.js";
-import { createVoiceThereWidget } from "./index.js";
+import {
+  createVoiceThereWidget,
+  createVoiceThereWidgetAsync,
+} from "./index.js";
+import { WIDGET_PRESET_IDS } from "./config.js";
 
 type MockElement = {
   tagName: string;
   style: Record<string, string>;
+  dataset: Record<string, string>;
   children: MockElement[];
   attrs: Record<string, string>;
   textContent: string;
@@ -43,6 +48,7 @@ function createMockElement(tag: string): MockElement {
   const el: MockElement = {
     tagName: tag.toUpperCase(),
     style: {},
+    dataset: {},
     children: [],
     attrs: {},
     textContent: "",
@@ -87,6 +93,10 @@ function findByAttr(
   return undefined;
 }
 
+function findWidgetRoot(mount: MockElement): MockElement | undefined {
+  return mount.children.find((child) => child.dataset.voicetherePreset);
+}
+
 function findButtonByText(root: MockElement, text: string): MockElement | undefined {
   if (root.tagName === "BUTTON" && root.textContent === text) return root;
   for (const child of root.children) {
@@ -109,8 +119,15 @@ beforeEach(() => {
       el.play = vi.fn(async () => undefined);
       el.autoplay = true;
     }
-  if (tag === "button") {
+    if (tag === "button") {
       el.textContent = "";
+    }
+    if (tag === "div") {
+      Object.defineProperty(el, "dataset", {
+        value: el.dataset,
+        writable: true,
+        enumerable: true,
+      });
     }
     createdElements.push(el);
     return el;
@@ -122,6 +139,25 @@ beforeEach(() => {
     createElement,
     getElementById: () => null,
   });
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          v: 1,
+          projectId: "from-config",
+          apiBase: "https://cdn-config.example/v1",
+          preset: "rounded-card",
+          launcherLabel: "Help",
+          greeting: "Hello from CDN",
+          position: "bottom-left",
+          mode: "chat",
+        }),
+    })),
+  );
 
   startSession.mockResolvedValue({
     ok: true,
@@ -198,5 +234,112 @@ describe("createVoiceThereWidget", () => {
 
     const session = await connectBrowserSession.mock.results[0]!.value;
     expect(session.requestAudioInputAccess).toHaveBeenCalled();
+  });
+
+  it("applies preset layout and position from inline options", () => {
+    createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      preset: "voice-orb",
+      position: "bottom-left",
+      theme: { primary: "#112233" },
+      mount: mount as unknown as HTMLElement,
+    });
+
+    const root = findWidgetRoot(mount);
+    expect(root).toBeDefined();
+    expect(root!.dataset.voicetherePreset).toBe("voice-orb");
+    expect(root!.dataset.voicetherePosition).toBe("bottom-left");
+    expect(root!.style.left).toBe("16px");
+
+    const launcher = root!.children.find((c) => c.tagName === "BUTTON");
+    expect(launcher?.style.borderRadius).toBe("50%");
+    expect(launcher?.style.background).toBe("#112233");
+  });
+
+  it("throws when configUrl is passed to sync constructor", () => {
+    expect(() =>
+      createVoiceThereWidget({
+        clientKey: "key",
+        configUrl: "https://cdn.example/config.json",
+      }),
+    ).toThrow(/createVoiceThereWidgetAsync/);
+  });
+});
+
+describe("createVoiceThereWidgetAsync", () => {
+  it("boots from mocked configUrl and merges inline clientKey", async () => {
+    await createVoiceThereWidgetAsync({
+      clientKey: "inline-key",
+      configUrl: "https://cdn.example/widgets/w_test/config.json",
+      mount: mount as unknown as HTMLElement,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://cdn.example/widgets/w_test/config.json",
+      expect.objectContaining({ credentials: "omit" }),
+    );
+
+    const root = findWidgetRoot(mount);
+    expect(root?.dataset.voicetherePreset).toBe("rounded-card");
+    expect(root?.dataset.voicetherePosition).toBe("bottom-left");
+
+    const launcher = root!.children.find((c) => c.tagName === "BUTTON");
+    expect(launcher?.textContent).toBe("Help");
+
+    const greeting = findByAttr(mount, "data-voicethere-greeting");
+    expect(greeting?.textContent).toBe("Hello from CDN");
+
+    const connectBtn = findButtonByText(mount, "Connect");
+    connectBtn!.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "from-config",
+        apiBase: "https://cdn-config.example/v1",
+        headers: { Authorization: "Bearer inline-key" },
+      }),
+    );
+  });
+
+  it("inline options override fetched config", async () => {
+    await createVoiceThereWidgetAsync({
+      clientKey: "key",
+      projectId: "inline-project",
+      apiBase: "https://inline.example/v1",
+      configUrl: "https://cdn.example/config.json",
+      preset: "minimal-bar",
+      mount: mount as unknown as HTMLElement,
+    });
+
+    const root = findWidgetRoot(mount);
+    expect(root?.dataset.voicetherePreset).toBe("minimal-bar");
+
+    const connectBtn = findButtonByText(mount, "Connect");
+    connectBtn!.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "inline-project",
+        apiBase: "https://inline.example/v1",
+      }),
+    );
+  });
+
+  it("covers every preset id without error", () => {
+    for (const preset of WIDGET_PRESET_IDS) {
+      const localMount = createMockElement("div");
+      createVoiceThereWidget({
+        projectId: "p",
+        apiBase: "https://api.example.com",
+        clientKey: "key",
+        preset,
+        mount: localMount as unknown as HTMLElement,
+      });
+      expect(localMount.children[0]?.dataset.voicetherePreset).toBe(preset);
+    }
   });
 });

@@ -8,20 +8,43 @@ import {
   type WebRtcConnectionStatus,
 } from "../browser/browser-session.js";
 import type { AudioInputState } from "../browser/microphone.js";
+import {
+  fetchVoiceThereWidgetConfig,
+  widgetConfigModeToSessionMode,
+  type VoiceThereWidgetConfigV1,
+  type VoiceThereWidgetTheme,
+  type WidgetPosition,
+  type WidgetPresetId,
+} from "./config.js";
+import {
+  applyPreset,
+  applyWidgetPosition,
+  type ResolvedWidgetTheme,
+} from "./presets.js";
 
-export type VoiceThereWidgetTheme = {
-  primary?: string;
-  background?: string;
-  text?: string;
-};
+export type { VoiceThereWidgetConfigV1, VoiceThereWidgetTheme, WidgetPosition, WidgetPresetId };
+export {
+  WidgetConfigError,
+  fetchVoiceThereWidgetConfig,
+  parseVoiceThereWidgetConfigJson,
+  parseVoiceThereWidgetConfigV1,
+  WIDGET_CONFIG_VERSION,
+  WIDGET_PRESET_IDS,
+} from "./config.js";
+export { applyPreset, getWidgetPreset } from "./presets.js";
 
 export type VoiceThereWidgetOptions = {
-  projectId: string;
-  apiBase: string;
   clientKey: string;
+  projectId?: string;
+  apiBase?: string;
   mode?: BrowserSessionMode;
   theme?: VoiceThereWidgetTheme;
   mount?: HTMLElement;
+  preset?: WidgetPresetId;
+  configUrl?: string;
+  launcherLabel?: string;
+  greeting?: string;
+  position?: WidgetPosition;
 };
 
 export type VoiceThereWidget = {
@@ -29,6 +52,71 @@ export type VoiceThereWidget = {
   close: () => void;
   destroy: () => void;
 };
+
+type ResolvedVoiceThereWidgetOptions = {
+  projectId: string;
+  apiBase: string;
+  clientKey: string;
+  mode: BrowserSessionMode;
+  theme?: VoiceThereWidgetTheme;
+  mount?: HTMLElement;
+  preset: WidgetPresetId;
+  launcherLabel: string;
+  greeting?: string;
+  position: WidgetPosition;
+};
+
+function mergeWidgetOptions(
+  inline: VoiceThereWidgetOptions,
+  remote?: VoiceThereWidgetConfigV1,
+): ResolvedVoiceThereWidgetOptions {
+  const projectId = inline.projectId ?? remote?.projectId;
+  const apiBase = inline.apiBase ?? remote?.apiBase;
+  if (!projectId) {
+    throw new Error("VoiceThere widget requires projectId (inline or from configUrl)");
+  }
+  if (!apiBase) {
+    throw new Error("VoiceThere widget requires apiBase (inline or from configUrl)");
+  }
+
+  const mode =
+    inline.mode ??
+    widgetConfigModeToSessionMode(remote?.mode) ??
+    BrowserSessionModeType.Chat;
+
+  return {
+    projectId,
+    apiBase,
+    clientKey: inline.clientKey,
+    mode,
+    theme: inline.theme ?? remote?.theme,
+    mount: inline.mount,
+    preset: inline.preset ?? remote?.preset ?? "pill-dark",
+    launcherLabel: inline.launcherLabel ?? remote?.launcherLabel ?? "Chat",
+    greeting: inline.greeting ?? remote?.greeting,
+    position: inline.position ?? remote?.position ?? "bottom-right",
+  };
+}
+
+export async function createVoiceThereWidgetAsync(
+  options: VoiceThereWidgetOptions,
+): Promise<VoiceThereWidget> {
+  const remote = options.configUrl
+    ? await fetchVoiceThereWidgetConfig(options.configUrl)
+    : undefined;
+  return buildVoiceThereWidget(mergeWidgetOptions(options, remote));
+}
+
+export function createVoiceThereWidget(
+  options: VoiceThereWidgetOptions,
+): VoiceThereWidget {
+  if (options.configUrl) {
+    throw new Error(
+      "configUrl requires createVoiceThereWidgetAsync(); fetch CDN config before mounting",
+    );
+  }
+  return buildVoiceThereWidget(mergeWidgetOptions(options));
+}
 
 function formatWebRtcStatus(status: WebRtcConnectionStatus): string {
   if (status.ready) return "Connected";
@@ -63,39 +151,47 @@ function isVoiceSessionMode(mode: BrowserSessionMode): boolean {
   );
 }
 
-export function createVoiceThereWidget(
-  options: VoiceThereWidgetOptions,
+function applyAccentTheme(
+  elements: HTMLElement[],
+  theme: ResolvedWidgetTheme,
+): void {
+  for (const el of elements) {
+    el.style.background = theme.primary;
+    el.style.color = theme.text;
+  }
+}
+
+function buildVoiceThereWidget(
+  options: ResolvedVoiceThereWidgetOptions,
 ): VoiceThereWidget {
   const mount = options.mount ?? document.body;
-  const mode = options.mode ?? BrowserSessionModeType.Chat;
-  const theme = options.theme ?? {};
+  const mode = options.mode;
 
   const root = document.createElement("div");
   root.style.position = "fixed";
-  root.style.bottom = "16px";
-  root.style.right = "16px";
   root.style.zIndex = "99999";
   root.style.fontFamily = "system-ui, sans-serif";
 
   const launcher = document.createElement("button");
-  launcher.textContent = "Chat";
-  launcher.style.background = theme.primary ?? "#06b6d4";
-  launcher.style.color = theme.text ?? "#0f172a";
+  launcher.textContent = options.launcherLabel;
   launcher.style.border = "none";
-  launcher.style.borderRadius = "999px";
-  launcher.style.padding = "12px 16px";
   launcher.style.cursor = "pointer";
 
   const panel = document.createElement("div");
   panel.style.display = "none";
-  panel.style.width = "320px";
-  panel.style.height = "420px";
-  panel.style.background = theme.background ?? "#0b1220";
-  panel.style.color = theme.text ?? "#e2e8f0";
-  panel.style.border = "1px solid rgba(255,255,255,0.1)";
-  panel.style.borderRadius = "12px";
-  panel.style.padding = "12px";
-  panel.style.boxShadow = "0 8px 30px rgba(0,0,0,0.35)";
+  panel.style.boxSizing = "border-box";
+
+  const theme = applyPreset({ root, launcher, panel }, options.preset, options.theme);
+  applyWidgetPosition(root, options.position, options.preset);
+
+  const greeting = document.createElement("div");
+  greeting.setAttribute("data-voicethere-greeting", "");
+  greeting.style.display = options.greeting ? "block" : "none";
+  greeting.style.fontSize = "13px";
+  greeting.style.lineHeight = "1.4";
+  greeting.style.marginBottom = "8px";
+  greeting.style.color = theme.text;
+  greeting.textContent = options.greeting ?? "";
 
   const status = document.createElement("div");
   status.style.fontSize = "12px";
@@ -158,8 +254,6 @@ export function createVoiceThereWidget(
   micRequestBtn.style.padding = "6px 10px";
   micRequestBtn.style.borderRadius = "6px";
   micRequestBtn.style.border = "none";
-  micRequestBtn.style.background = theme.primary ?? "#06b6d4";
-  micRequestBtn.style.color = theme.text ?? "#0f172a";
   micRequestBtn.style.cursor = "pointer";
   micRequestBtn.style.fontSize = "11px";
   micWarning.append(micRequestBtn);
@@ -185,11 +279,11 @@ export function createVoiceThereWidget(
   playbackEnableBtn.style.padding = "6px 10px";
   playbackEnableBtn.style.borderRadius = "6px";
   playbackEnableBtn.style.border = "none";
-  playbackEnableBtn.style.background = theme.primary ?? "#06b6d4";
-  playbackEnableBtn.style.color = theme.text ?? "#0f172a";
   playbackEnableBtn.style.cursor = "pointer";
   playbackEnableBtn.style.fontSize = "11px";
   playbackWarning.append(playbackEnableBtn);
+
+  applyAccentTheme([micRequestBtn, playbackEnableBtn], theme);
 
   const hideSessionNotices = () => {
     micWarning.style.display = "none";
@@ -223,7 +317,7 @@ export function createVoiceThereWidget(
   input.style.borderRadius = "8px";
   input.style.border = "1px solid rgba(255,255,255,0.15)";
   input.style.background = "#111827";
-  input.style.color = "#e2e8f0";
+  input.style.color = theme.text;
 
   const connectBtn = document.createElement("button");
   connectBtn.textContent = "Connect";
@@ -232,11 +326,11 @@ export function createVoiceThereWidget(
   connectBtn.style.padding = "8px";
   connectBtn.style.borderRadius = "8px";
   connectBtn.style.border = "none";
-  connectBtn.style.background = theme.primary ?? "#06b6d4";
-  connectBtn.style.color = theme.text ?? "#0f172a";
   connectBtn.style.cursor = "pointer";
+  applyAccentTheme([connectBtn], theme);
 
   panel.append(
+    greeting,
     status,
     micWarning,
     playbackWarning,
