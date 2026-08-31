@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- **Embed widget CDN config** — `createVoiceThereWidgetAsync` still mounts the launcher from inline options when `configUrl` is missing, unreachable, or returns invalid JSON; warns in the console instead of rejecting the promise.
 - **Audio visualizer idle frame** — `attachAudioVisualizer().stop()` and ended MediaStream tracks now clear the canvas and draw a flat midline instead of freezing on the last analyser snapshot.
 
 ## 0.7.29 — 2026-08-28

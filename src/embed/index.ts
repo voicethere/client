@@ -10,6 +10,7 @@ import {
 import type { AudioInputState } from "../browser/microphone.js";
 import {
   fetchVoiceThereWidgetConfig,
+  WidgetConfigError,
   widgetConfigModeToSessionMode,
   type VoiceThereWidgetConfigV1,
   type VoiceThereWidgetTheme,
@@ -22,7 +23,12 @@ import {
   type ResolvedWidgetTheme,
 } from "./presets.js";
 
-export type { VoiceThereWidgetConfigV1, VoiceThereWidgetTheme, WidgetPosition, WidgetPresetId };
+export type {
+  VoiceThereWidgetConfigV1,
+  VoiceThereWidgetTheme,
+  WidgetPosition,
+  WidgetPresetId,
+};
 export {
   WidgetConfigError,
   fetchVoiceThereWidgetConfig,
@@ -73,10 +79,14 @@ function mergeWidgetOptions(
   const projectId = inline.projectId ?? remote?.projectId;
   const apiBase = inline.apiBase ?? remote?.apiBase;
   if (!projectId) {
-    throw new Error("VoiceThere widget requires projectId (inline or from configUrl)");
+    throw new Error(
+      "VoiceThere widget requires projectId (inline or from configUrl)",
+    );
   }
   if (!apiBase) {
-    throw new Error("VoiceThere widget requires apiBase (inline or from configUrl)");
+    throw new Error(
+      "VoiceThere widget requires apiBase (inline or from configUrl)",
+    );
   }
 
   const mode =
@@ -101,9 +111,21 @@ function mergeWidgetOptions(
 export async function createVoiceThereWidgetAsync(
   options: VoiceThereWidgetOptions,
 ): Promise<VoiceThereWidget> {
-  const remote = options.configUrl
-    ? await fetchVoiceThereWidgetConfig(options.configUrl)
-    : undefined;
+  let remote: VoiceThereWidgetConfigV1 | undefined;
+  if (options.configUrl) {
+    try {
+      remote = await fetchVoiceThereWidgetConfig(options.configUrl);
+    } catch (error) {
+      const detail =
+        error instanceof WidgetConfigError || error instanceof Error
+          ? error.message
+          : String(error);
+      console.warn(
+        `VoiceThere widget: CDN config unavailable (${options.configUrl}): ${detail}`,
+      );
+      remote = undefined;
+    }
+  }
   return buildVoiceThereWidget(mergeWidgetOptions(options, remote));
 }
 
@@ -181,7 +203,11 @@ function buildVoiceThereWidget(
   panel.style.display = "none";
   panel.style.boxSizing = "border-box";
 
-  const theme = applyPreset({ root, launcher, panel }, options.preset, options.theme);
+  const theme = applyPreset(
+    { root, launcher, panel },
+    options.preset,
+    options.theme,
+  );
   applyWidgetPosition(root, options.position, options.preset);
 
   const greeting = document.createElement("div");

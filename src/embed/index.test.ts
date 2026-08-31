@@ -6,7 +6,8 @@ const { startSession, connectBrowserSession } = vi.hoisted(() => ({
 }));
 
 vi.mock("../browser/browser-session.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../browser/browser-session.js")>();
+  const actual =
+    await importOriginal<typeof import("../browser/browser-session.js")>();
   return {
     ...actual,
     startSession,
@@ -35,7 +36,10 @@ type MockElement = {
   remove: () => void;
   setAttribute: (name: string, value?: string) => void;
   getAttribute: (name: string) => string | null;
-  addEventListener: (type: string, handler: (event: { key: string }) => void) => void;
+  addEventListener: (
+    type: string,
+    handler: (event: { key: string }) => void,
+  ) => void;
   click: () => void;
   placeholder?: string;
   title?: string;
@@ -81,10 +85,7 @@ function createMockElement(tag: string): MockElement {
   return el;
 }
 
-function findByAttr(
-  root: MockElement,
-  attr: string,
-): MockElement | undefined {
+function findByAttr(root: MockElement, attr: string): MockElement | undefined {
   if (root.attrs[attr] !== undefined) return root;
   for (const child of root.children) {
     const found = findByAttr(child, attr);
@@ -97,7 +98,10 @@ function findWidgetRoot(mount: MockElement): MockElement | undefined {
   return mount.children.find((child) => child.dataset.voicetherePreset);
 }
 
-function findButtonByText(root: MockElement, text: string): MockElement | undefined {
+function findButtonByText(
+  root: MockElement,
+  text: string,
+): MockElement | undefined {
   if (root.tagName === "BUTTON" && root.textContent === text) return root;
   for (const child of root.children) {
     const found = findButtonByText(child, text);
@@ -341,5 +345,92 @@ describe("createVoiceThereWidgetAsync", () => {
       });
       expect(localMount.children[0]?.dataset.voicetherePreset).toBe(preset);
     }
+  });
+
+  describe("configUrl fetch fallback", () => {
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    const inlineBootstrap = {
+      clientKey: "key",
+      projectId: "inline-project",
+      apiBase: "https://inline.example/v1",
+      configUrl: "https://cdn.example/config.json",
+      mount: mount as unknown as HTMLElement,
+    };
+
+    beforeEach(() => {
+      warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      warnSpy.mockRestore();
+    });
+
+    it("falls back to inline options on HTTP 403", async () => {
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: async () => "",
+      } as Response);
+
+      await createVoiceThereWidgetAsync(inlineBootstrap);
+
+      expect(warnSpy).toHaveBeenCalled();
+      const root = findWidgetRoot(mount);
+      expect(root?.dataset.voicetherePreset).toBe("pill-dark");
+      const launcher = root!.children.find((c) => c.tagName === "BUTTON");
+      expect(launcher?.textContent).toBe("Chat");
+    });
+
+    it("falls back on network failure", async () => {
+      vi.mocked(fetch).mockRejectedValueOnce(new Error("network down"));
+
+      await createVoiceThereWidgetAsync(inlineBootstrap);
+
+      expect(warnSpy).toHaveBeenCalled();
+      expect(findWidgetRoot(mount)).toBeDefined();
+    });
+
+    it("falls back on invalid JSON body", async () => {
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => "not-json",
+      } as Response);
+
+      await createVoiceThereWidgetAsync(inlineBootstrap);
+
+      expect(warnSpy).toHaveBeenCalled();
+      expect(findWidgetRoot(mount)).toBeDefined();
+    });
+
+    it("falls back on forbidden secret key in config", async () => {
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ v: 1, clientKey: "secret" }),
+      } as Response);
+
+      await createVoiceThereWidgetAsync(inlineBootstrap);
+
+      expect(warnSpy).toHaveBeenCalled();
+      expect(findWidgetRoot(mount)).toBeDefined();
+    });
+
+    it("still throws when fetch fails and inline bootstrap is missing", async () => {
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: async () => "",
+      } as Response);
+
+      await expect(
+        createVoiceThereWidgetAsync({
+          clientKey: "key",
+          configUrl: "https://cdn.example/config.json",
+          mount: mount as unknown as HTMLElement,
+        }),
+      ).rejects.toThrow(/requires projectId/);
+    });
   });
 });
