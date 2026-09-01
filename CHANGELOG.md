@@ -2,9 +2,11 @@
 
 ## [Unreleased]
 
+## 0.8.1 — 2026-09-01
+
 ### Fixed
 
-- **Mic-denied synthetic fallback** — When microphone permission is denied or unavailable, the synthetic outbound track now sends inaudible looping white noise instead of silence so WebRTC is not DTX-suppressed, the runner receives `ontrack`, and the voice conversation can start.
+- **Mic-denied synthetic fallback** — When microphone permission is denied or unavailable, the synthetic outbound track now sends inaudible looping white noise instead of silence so WebRTC is not DTX-suppressed, the runner receives `ontrack`, and the voice conversation can start. The production embed API `createVoiceThereWidget({ apiBase, projectId, clientKey, mode })` (no `configUrl`) is unchanged.
 
 ## 0.8.0 — 2026-08-31
 
