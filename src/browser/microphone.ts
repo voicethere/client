@@ -1,9 +1,17 @@
 /**
- * Browser microphone acquisition with silent synthetic fallback when GUM is denied
- * or unavailable. Used by voice sessions to keep an outbound audio track live.
+ * Browser microphone acquisition with low-level noise synthetic fallback when GUM
+ * is denied or unavailable. Used by voice sessions to keep an outbound audio track
+ * live so WebRTC sends RTP (silent gain=0 is DTX-suppressed and the runner never
+ * receives ontrack).
  */
 
 export type AudioInputState = "live" | "denied" | "unavailable" | "synthetic";
+
+/** Peak gain for synthetic mic white noise — inaudible but enough to avoid DTX. */
+export const SYNTHETIC_MIC_NOISE_GAIN = 0.004;
+
+/** Duration of one loop of synthetic white noise (seconds). */
+const SYNTHETIC_MIC_NOISE_BUFFER_SECONDS = 0.25;
 
 export type AudioInputDevice = {
   deviceId: string;
@@ -11,9 +19,7 @@ export type AudioInputDevice = {
 };
 
 export type AcquireAudioInputOptions = {
-  getUserMedia?: (
-    constraints: MediaStreamConstraints,
-  ) => Promise<MediaStream>;
+  getUserMedia?: (constraints: MediaStreamConstraints) => Promise<MediaStream>;
   deviceId?: string | null;
 };
 
@@ -78,8 +84,10 @@ export function stopMicStream(stream: MediaStream | null): void {
 }
 
 /**
- * Silent outbound mic substitute — keeps WebRTC outbound audio negotiation alive
- * when real microphone access is denied or unavailable.
+ * Low-level noise outbound mic substitute — keeps WebRTC outbound audio negotiation
+ * alive when real microphone access is denied or unavailable. Emits looping white
+ * noise at {@link SYNTHETIC_MIC_NOISE_GAIN} so RTP is not DTX-suppressed and the
+ * runner receives ontrack and can start VoiceAgent.
  */
 export function createSyntheticMicStream(): {
   stream: MediaStream;
@@ -115,19 +123,35 @@ export function createSyntheticMicStream(): {
   }
 
   const ctx = new AudioCtx();
+  void ctx.resume();
+
   const dest = ctx.createMediaStreamDestination();
   const gain = ctx.createGain();
-  gain.gain.value = 0;
-  const osc = ctx.createOscillator();
-  osc.connect(gain);
+  gain.gain.value = SYNTHETIC_MIC_NOISE_GAIN;
+
+  const buffer = ctx.createBuffer(
+    1,
+    Math.ceil(ctx.sampleRate * SYNTHETIC_MIC_NOISE_BUFFER_SECONDS),
+    ctx.sampleRate,
+  );
+  const channel = buffer.getChannelData(0);
+  for (let i = 0; i < channel.length; i++) {
+    channel[i] = Math.random() * 2 - 1;
+  }
+
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.loop = true;
+  source.connect(gain);
   gain.connect(dest);
-  osc.start();
+  source.start();
+
   const stream = dest.stream;
   return {
     stream,
     dispose: () => {
       try {
-        osc.stop();
+        source.stop();
       } catch {
         /* ignore */
       }
@@ -150,8 +174,9 @@ function syntheticAcquireResult(
 }
 
 /**
- * Acquire microphone audio, falling back to a silent synthetic stream on deny or error.
- * Never throws solely because GUM failed — callers always receive a usable stream.
+ * Acquire microphone audio, falling back to a low-level noise synthetic stream on
+ * deny or error. Never throws solely because GUM failed — callers always receive a
+ * usable stream that produces outbound RTP for the runner.
  */
 export async function acquireAudioInput(
   options: AcquireAudioInputOptions = {},

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Mic-denied synthetic fallback** — When microphone permission is denied or unavailable, the synthetic outbound track now sends inaudible looping white noise instead of silence so WebRTC is not DTX-suppressed, the runner receives `ontrack`, and the voice conversation can start.
+
 ## 0.8.0 — 2026-08-31
 
 ### Added
