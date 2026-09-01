@@ -270,6 +270,26 @@ describe("createVoiceThereWidget", () => {
       }),
     ).toThrow(/createVoiceThereWidgetAsync/);
   });
+
+  it("mounts the production legacy snippet without configUrl", () => {
+    // Production dashboard (v0.1.4) still emits:
+    // import { createVoiceThereWidget } from "https://esm.sh/@voicethere/client@0.7.29/embed"
+    // createVoiceThereWidget({ apiBase, projectId, clientKey, mode: "chat" })
+    expect(() =>
+      createVoiceThereWidget({
+        apiBase: "https://sessions.voicethere.io/v1",
+        projectId: "p",
+        clientKey: "key",
+        mode: BrowserSessionModeType.Chat,
+        mount: mount as unknown as HTMLElement,
+      }),
+    ).not.toThrow();
+
+    const root = findWidgetRoot(mount);
+    expect(root).toBeDefined();
+    const connectBtn = findButtonByText(mount, "Connect");
+    expect(connectBtn).toBeDefined();
+  });
 });
 
 describe("createVoiceThereWidgetAsync", () => {
