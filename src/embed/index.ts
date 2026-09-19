@@ -15,11 +15,18 @@ import {
   type VoiceThereWidgetConfigV1,
   type VoiceThereWidgetTheme,
   type WidgetPosition,
+  type WidgetPositionOffset,
   type WidgetPresetId,
 } from "./config.js";
 import {
+  WIDGET_CSS_CLASSES,
+  WIDGET_CSS_VARIABLES,
+  WIDGET_CUSTOM_STYLE_ATTR,
+} from "./css.js";
+import {
   applyPreset,
   applyWidgetPosition,
+  getWidgetPreset,
   type ResolvedWidgetTheme,
 } from "./presets.js";
 
@@ -27,6 +34,7 @@ export type {
   VoiceThereWidgetConfigV1,
   VoiceThereWidgetTheme,
   WidgetPosition,
+  WidgetPositionOffset,
   WidgetPresetId,
 };
 export {
@@ -35,9 +43,11 @@ export {
   parseVoiceThereWidgetConfigJson,
   parseVoiceThereWidgetConfigV1,
   WIDGET_CONFIG_VERSION,
+  WIDGET_POSITIONS,
   WIDGET_PRESET_IDS,
 } from "./config.js";
 export { applyPreset, getWidgetPreset } from "./presets.js";
+export { WIDGET_CSS_CLASSES, WIDGET_CSS_VARIABLES } from "./css.js";
 
 export type VoiceThereWidgetOptions = {
   clientKey: string;
@@ -51,12 +61,15 @@ export type VoiceThereWidgetOptions = {
   launcherLabel?: string;
   greeting?: string;
   position?: WidgetPosition;
+  positionOffset?: WidgetPositionOffset;
+  customCss?: string;
 };
 
 export type VoiceThereWidget = {
   open: () => void;
   close: () => void;
   destroy: () => void;
+  updateConfig: (partial: Partial<VoiceThereWidgetConfigV1>) => void;
 };
 
 type ResolvedVoiceThereWidgetOptions = {
@@ -70,6 +83,8 @@ type ResolvedVoiceThereWidgetOptions = {
   launcherLabel: string;
   greeting?: string;
   position: WidgetPosition;
+  positionOffset?: WidgetPositionOffset;
+  customCss?: string;
 };
 
 function mergeWidgetOptions(
@@ -105,6 +120,8 @@ function mergeWidgetOptions(
     launcherLabel: inline.launcherLabel ?? remote?.launcherLabel ?? "Chat",
     greeting: inline.greeting ?? remote?.greeting,
     position: inline.position ?? remote?.position ?? "bottom-right",
+    positionOffset: inline.positionOffset ?? remote?.positionOffset,
+    customCss: inline.customCss ?? remote?.customCss,
   };
 }
 
@@ -183,43 +200,260 @@ function applyAccentTheme(
   }
 }
 
+function applyWidgetCssVariables(
+  root: HTMLElement,
+  resolved: ResolvedWidgetTheme,
+  theme?: VoiceThereWidgetTheme,
+  presetId?: WidgetPresetId,
+): void {
+  const preset = presetId ? getWidgetPreset(presetId) : undefined;
+  const chat = theme?.chat;
+  const incoming = chat?.incoming;
+  const outgoing = chat?.outgoing;
+
+  root.style.setProperty("--vt-color-primary", resolved.primary);
+  root.style.setProperty("--vt-color-bg", resolved.background);
+  root.style.setProperty("--vt-color-text", resolved.text);
+  root.style.setProperty(
+    "--vt-font-ui",
+    theme?.fontFamily ?? "system-ui, sans-serif",
+  );
+  root.style.setProperty("--vt-font-size-ui", theme?.fontSize ?? "14px");
+  root.style.setProperty(
+    "--vt-font-incoming",
+    incoming?.fontFamily ?? theme?.fontFamily ?? "inherit",
+  );
+  root.style.setProperty(
+    "--vt-font-outgoing",
+    outgoing?.fontFamily ?? theme?.fontFamily ?? "inherit",
+  );
+  root.style.setProperty(
+    "--vt-font-size-incoming",
+    incoming?.fontSize ?? "13px",
+  );
+  root.style.setProperty(
+    "--vt-font-size-outgoing",
+    outgoing?.fontSize ?? "13px",
+  );
+  root.style.setProperty(
+    "--vt-bubble-incoming-bg",
+    incoming?.bubble ?? "rgba(255,255,255,0.08)",
+  );
+  root.style.setProperty(
+    "--vt-bubble-incoming-fg",
+    incoming?.color ?? resolved.text,
+  );
+  root.style.setProperty(
+    "--vt-bubble-outgoing-bg",
+    outgoing?.bubble ?? resolved.primary,
+  );
+  root.style.setProperty(
+    "--vt-bubble-outgoing-fg",
+    outgoing?.color ?? resolved.text,
+  );
+  root.style.setProperty(
+    "--vt-header-bg",
+    chat?.headerBackground ?? resolved.background,
+  );
+  root.style.setProperty("--vt-input-bg", chat?.inputBackground ?? "#111827");
+  root.style.setProperty("--vt-input-fg", chat?.inputColor ?? resolved.text);
+  root.style.setProperty(
+    "--vt-panel-width",
+    chat?.panelWidth ?? preset?.panelWidth ?? "320px",
+  );
+  root.style.setProperty(
+    "--vt-panel-height",
+    chat?.panelHeight ?? preset?.panelHeight ?? "420px",
+  );
+  root.style.setProperty(
+    "--vt-panel-radius",
+    chat?.panelRadius ?? preset?.panelBorderRadius ?? "12px",
+  );
+
+  root.style.fontFamily = `var(--vt-font-ui)`;
+  root.style.fontSize = `var(--vt-font-size-ui)`;
+}
+
+function syncCustomCssStyle(
+  root: HTMLElement,
+  customCss?: string,
+): HTMLStyleElement | null {
+  let style = root.querySelector<HTMLStyleElement>(
+    `style[${WIDGET_CUSTOM_STYLE_ATTR}]`,
+  );
+  if (!customCss?.trim()) {
+    style?.remove();
+    return null;
+  }
+  if (!style) {
+    style = document.createElement("style");
+    style.setAttribute(WIDGET_CUSTOM_STYLE_ATTR, "");
+    root.append(style);
+  }
+  style.textContent = customCss;
+  return style;
+}
+
+type TranscriptRole = "incoming" | "outgoing" | "system";
+
+function appendTranscriptBubble(
+  transcript: HTMLElement,
+  role: TranscriptRole,
+  text: string,
+): void {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+
+  const bubble = document.createElement("div");
+  bubble.className = WIDGET_CSS_CLASSES.msg;
+  if (role === "incoming") {
+    bubble.classList.add(WIDGET_CSS_CLASSES.msgIncoming);
+    bubble.style.fontFamily = "var(--vt-font-incoming)";
+    bubble.style.fontSize = "var(--vt-font-size-incoming)";
+    bubble.style.background = "var(--vt-bubble-incoming-bg)";
+    bubble.style.color = "var(--vt-bubble-incoming-fg)";
+    bubble.style.alignSelf = "flex-start";
+  } else if (role === "outgoing") {
+    bubble.classList.add(WIDGET_CSS_CLASSES.msgOutgoing);
+    bubble.style.fontFamily = "var(--vt-font-outgoing)";
+    bubble.style.fontSize = "var(--vt-font-size-outgoing)";
+    bubble.style.background = "var(--vt-bubble-outgoing-bg)";
+    bubble.style.color = "var(--vt-bubble-outgoing-fg)";
+    bubble.style.alignSelf = "flex-end";
+  } else {
+    bubble.classList.add(WIDGET_CSS_CLASSES.msgSystem);
+    bubble.style.fontFamily = "var(--vt-font-incoming)";
+    bubble.style.fontSize = "var(--vt-font-size-incoming)";
+    bubble.style.opacity = "0.85";
+    bubble.style.alignSelf = "center";
+  }
+  bubble.style.maxWidth = "85%";
+  bubble.style.padding = "8px 10px";
+  bubble.style.borderRadius = "10px";
+  bubble.style.lineHeight = "1.4";
+  bubble.style.wordBreak = "break-word";
+  bubble.textContent = trimmed;
+  transcript.append(bubble);
+  transcript.scrollTop = transcript.scrollHeight;
+}
+
+function incomingTextFromControlMessage(
+  payload: Record<string, unknown>,
+): string | null {
+  const type = typeof payload.type === "string" ? payload.type : "";
+  if (
+    type === "session_error" ||
+    type === "agent_error" ||
+    type === "session_close" ||
+    type === "session_reconnect_token"
+  ) {
+    return null;
+  }
+
+  if (type === "speech_event") {
+    const event = typeof payload.event === "string" ? payload.event : "";
+    const text = typeof payload.text === "string" ? payload.text.trim() : "";
+    if (!text) return null;
+    if (event.includes("final") || event.includes("agent")) {
+      return text;
+    }
+    return null;
+  }
+
+  if (type === "chat_reply") {
+    const text = typeof payload.text === "string" ? payload.text.trim() : "";
+    return text || null;
+  }
+
+  if (type === "chat_broadcast") {
+    const text = typeof payload.text === "string" ? payload.text.trim() : "";
+    return text || null;
+  }
+
+  if (type === "chat") {
+    const role = typeof payload.role === "string" ? payload.role : "";
+    const text = typeof payload.text === "string" ? payload.text.trim() : "";
+    if (!text) return null;
+    if (role === "agent" || role === "assistant") {
+      return text;
+    }
+    return null;
+  }
+
+  const text = typeof payload.text === "string" ? payload.text.trim() : "";
+  if (
+    text &&
+    (type === "agent_message" || type === "message" || type === "assistant")
+  ) {
+    return text;
+  }
+
+  return null;
+}
+
 function buildVoiceThereWidget(
-  options: ResolvedVoiceThereWidgetOptions,
+  initialOptions: ResolvedVoiceThereWidgetOptions,
 ): VoiceThereWidget {
-  const mount = options.mount ?? document.body;
-  const mode = options.mode;
+  const runtime: ResolvedVoiceThereWidgetOptions = { ...initialOptions };
+  const mount = runtime.mount ?? document.body;
+  const mode = runtime.mode;
 
   const root = document.createElement("div");
+  root.className = WIDGET_CSS_CLASSES.root;
   root.style.position = "fixed";
   root.style.zIndex = "99999";
-  root.style.fontFamily = "system-ui, sans-serif";
+  root.style.display = "flex";
+  root.style.flexDirection = "column";
+  root.style.alignItems = "flex-end";
+  root.style.gap = "8px";
 
   const launcher = document.createElement("button");
-  launcher.textContent = options.launcherLabel;
+  launcher.type = "button";
+  launcher.className = WIDGET_CSS_CLASSES.launcher;
+  launcher.textContent = runtime.launcherLabel;
   launcher.style.border = "none";
   launcher.style.cursor = "pointer";
 
   const panel = document.createElement("div");
+  panel.className = WIDGET_CSS_CLASSES.panel;
   panel.style.display = "none";
   panel.style.boxSizing = "border-box";
+  panel.style.flexDirection = "column";
 
-  const theme = applyPreset(
-    { root, launcher, panel },
-    options.preset,
-    options.theme,
-  );
-  applyWidgetPosition(root, options.position, options.preset);
+  const header = document.createElement("div");
+  header.className = WIDGET_CSS_CLASSES.header;
+  header.style.display = "flex";
+  header.style.alignItems = "center";
+  header.style.justifyContent = "space-between";
+  header.style.marginBottom = "8px";
+  header.style.padding = "4px 0";
+  header.style.background = "var(--vt-header-bg)";
+
+  const headerTitle = document.createElement("span");
+  headerTitle.textContent = runtime.launcherLabel;
+  headerTitle.style.fontWeight = "600";
+
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = WIDGET_CSS_CLASSES.close;
+  closeBtn.setAttribute("aria-label", "Close chat");
+  closeBtn.textContent = "×";
+  closeBtn.style.border = "none";
+  closeBtn.style.background = "transparent";
+  closeBtn.style.cursor = "pointer";
+  closeBtn.style.fontSize = "20px";
+  closeBtn.style.lineHeight = "1";
+  closeBtn.style.color = "inherit";
+  header.append(headerTitle, closeBtn);
 
   const greeting = document.createElement("div");
+  greeting.className = WIDGET_CSS_CLASSES.greeting;
   greeting.setAttribute("data-voicethere-greeting", "");
-  greeting.style.display = options.greeting ? "block" : "none";
-  greeting.style.fontSize = "13px";
-  greeting.style.lineHeight = "1.4";
-  greeting.style.marginBottom = "8px";
-  greeting.style.color = theme.text;
-  greeting.textContent = options.greeting ?? "";
+  greeting.style.display = "none";
+  greeting.textContent = runtime.greeting ?? "";
 
   const status = document.createElement("div");
+  status.className = WIDGET_CSS_CLASSES.status;
   status.style.fontSize = "12px";
   status.style.marginBottom = "8px";
   status.style.display = "flex";
@@ -259,6 +493,7 @@ function buildVoiceThereWidget(
   inboundAudio.style.display = "none";
 
   const micWarning = document.createElement("div");
+  micWarning.className = WIDGET_CSS_CLASSES.micWarning;
   micWarning.setAttribute("data-voicethere-mic-warning", "");
   micWarning.style.display = "none";
   micWarning.style.fontSize = "11px";
@@ -285,6 +520,7 @@ function buildVoiceThereWidget(
   micWarning.append(micRequestBtn);
 
   const playbackWarning = document.createElement("div");
+  playbackWarning.className = WIDGET_CSS_CLASSES.playbackWarning;
   playbackWarning.setAttribute("data-voicethere-playback-warning", "");
   playbackWarning.style.display = "none";
   playbackWarning.style.fontSize = "11px";
@@ -309,7 +545,121 @@ function buildVoiceThereWidget(
   playbackEnableBtn.style.fontSize = "11px";
   playbackWarning.append(playbackEnableBtn);
 
-  applyAccentTheme([micRequestBtn, playbackEnableBtn], theme);
+  const transcript = document.createElement("div");
+  transcript.className = WIDGET_CSS_CLASSES.transcript;
+  transcript.style.flex = "1";
+  transcript.style.overflow = "auto";
+  transcript.style.display = "flex";
+  transcript.style.flexDirection = "column";
+  transcript.style.gap = "6px";
+  transcript.style.minHeight = "160px";
+  transcript.style.maxHeight = "260px";
+  transcript.style.padding = "4px 0";
+
+  const composer = document.createElement("div");
+  composer.className = WIDGET_CSS_CLASSES.composer;
+  composer.style.marginTop = "8px";
+
+  const input = document.createElement("input");
+  input.className = WIDGET_CSS_CLASSES.input;
+  input.placeholder = "Type a message…";
+  input.style.width = "100%";
+  input.style.padding = "8px";
+  input.style.borderRadius = "8px";
+  input.style.border = "1px solid rgba(255,255,255,0.15)";
+  input.style.background = "var(--vt-input-bg)";
+  input.style.color = "var(--vt-input-fg)";
+  input.style.boxSizing = "border-box";
+
+  const connectBtn = document.createElement("button");
+  connectBtn.type = "button";
+  connectBtn.className = WIDGET_CSS_CLASSES.connect;
+  connectBtn.textContent = "Connect";
+  connectBtn.style.marginTop = "8px";
+  connectBtn.style.width = "100%";
+  connectBtn.style.padding = "8px";
+  connectBtn.style.borderRadius = "8px";
+  connectBtn.style.border = "none";
+  connectBtn.style.cursor = "pointer";
+
+  composer.append(input, connectBtn);
+
+  panel.style.display = "none";
+  panel.style.flexDirection = "column";
+  panel.append(
+    header,
+    greeting,
+    status,
+    micWarning,
+    playbackWarning,
+    transcript,
+    composer,
+  );
+  root.append(launcher, panel, inboundAudio);
+  mount.append(root);
+
+  let session: Awaited<ReturnType<typeof connectBrowserSession>> | null = null;
+  let isOpen = false;
+
+  const debug = createDebugConsole(() => {
+    /* transcript is primary UI; debug export kept for session wiring */
+  });
+
+  const refreshGreetingBubble = () => {
+    const firstSystem = transcript.querySelector(
+      `.${WIDGET_CSS_CLASSES.msgSystem}`,
+    );
+    if (firstSystem) {
+      firstSystem.remove();
+    }
+    greeting.textContent = runtime.greeting ?? "";
+    if (runtime.greeting?.trim()) {
+      appendTranscriptBubble(transcript, "system", runtime.greeting);
+    }
+  };
+
+  let resolvedTheme: ResolvedWidgetTheme;
+
+  const applyAppearance = () => {
+    resolvedTheme = applyPreset(
+      { root, launcher, panel },
+      runtime.preset,
+      runtime.theme,
+    );
+    applyWidgetPosition(
+      root,
+      runtime.position,
+      runtime.preset,
+      runtime.positionOffset,
+    );
+    applyWidgetCssVariables(root, resolvedTheme, runtime.theme, runtime.preset);
+    applyAccentTheme(
+      [micRequestBtn, playbackEnableBtn, connectBtn],
+      resolvedTheme,
+    );
+    launcher.textContent = runtime.launcherLabel;
+    headerTitle.textContent = runtime.launcherLabel;
+    input.style.background = "var(--vt-input-bg)";
+    input.style.color = "var(--vt-input-fg)";
+    header.style.background = "var(--vt-header-bg)";
+    syncCustomCssStyle(root, runtime.customCss);
+    refreshGreetingBubble();
+  };
+
+  applyAppearance();
+
+  const setOpen = (open: boolean) => {
+    isOpen = open;
+    if (open) {
+      panel.style.display = "flex";
+      launcher.style.display = "none";
+      root.dataset.vtOpen = "true";
+    } else {
+      panel.style.display = "none";
+      launcher.style.display = "";
+      delete root.dataset.vtOpen;
+    }
+  };
 
   const hideSessionNotices = () => {
     micWarning.style.display = "none";
@@ -325,62 +675,11 @@ function buildVoiceThereWidget(
     micWarning.style.display = isMicLimitedState(micState) ? "block" : "none";
   };
 
-  const log = document.createElement("pre");
-  log.style.flex = "1";
-  log.style.overflow = "auto";
-  log.style.fontSize = "11px";
-  log.style.background = "rgba(0,0,0,0.25)";
-  log.style.padding = "8px";
-  log.style.borderRadius = "8px";
-  log.style.height = "260px";
-  log.style.whiteSpace = "pre-wrap";
-
-  const input = document.createElement("input");
-  input.placeholder = "Type a message…";
-  input.style.width = "100%";
-  input.style.marginTop = "8px";
-  input.style.padding = "8px";
-  input.style.borderRadius = "8px";
-  input.style.border = "1px solid rgba(255,255,255,0.15)";
-  input.style.background = "#111827";
-  input.style.color = theme.text;
-
-  const connectBtn = document.createElement("button");
-  connectBtn.textContent = "Connect";
-  connectBtn.style.marginTop = "8px";
-  connectBtn.style.width = "100%";
-  connectBtn.style.padding = "8px";
-  connectBtn.style.borderRadius = "8px";
-  connectBtn.style.border = "none";
-  connectBtn.style.cursor = "pointer";
-  applyAccentTheme([connectBtn], theme);
-
-  panel.append(
-    greeting,
-    status,
-    micWarning,
-    playbackWarning,
-    log,
-    input,
-    connectBtn,
-  );
-  root.append(launcher, panel, inboundAudio);
-  mount.append(root);
-
-  let session: Awaited<ReturnType<typeof connectBrowserSession>> | null = null;
-
-  const renderLog = () => {
-    log.textContent = debug.exportText();
-  };
-
-  const debug = createDebugConsole(() => renderLog());
-
   micRequestBtn.onclick = () => {
     void (async () => {
       if (!session) return;
       await session.requestAudioInputAccess();
       refreshMicNotice();
-      renderLog();
     })();
   };
 
@@ -391,7 +690,6 @@ function buildVoiceThereWidget(
       if (ok) {
         playbackWarning.style.display = "none";
       }
-      renderLog();
     })();
   };
 
@@ -410,9 +708,9 @@ function buildVoiceThereWidget(
 
       setStatusDisplay("Connecting…", true);
       const started = await startSession({
-        apiBase: options.apiBase,
-        projectId: options.projectId,
-        headers: { Authorization: `Bearer ${options.clientKey}` },
+        apiBase: runtime.apiBase,
+        projectId: runtime.projectId,
+        headers: { Authorization: `Bearer ${runtime.clientKey}` },
         onStatus: (s) => {
           if (s.status === "waiting") {
             const position =
@@ -425,8 +723,6 @@ function buildVoiceThereWidget(
         debug,
       });
 
-      renderLog();
-
       if (!started.ok) {
         setStatusDisplay(started.message);
         return;
@@ -437,6 +733,12 @@ function buildVoiceThereWidget(
         credentials: started.credentials,
         audioElement: inboundAudio,
         onDebugEvent: debug,
+        onControlMessage: (payload) => {
+          const incoming = incomingTextFromControlMessage(payload);
+          if (incoming) {
+            appendTranscriptBubble(transcript, "incoming", incoming);
+          }
+        },
         onConnectionStatus: (connectionStatus) => {
           setStatusDisplay(formatWebRtcStatus(connectionStatus));
         },
@@ -455,7 +757,6 @@ function buildVoiceThereWidget(
       connectBtn.textContent = "Disconnect";
       connectBtn.title =
         "Disconnect this session. Connect again to start a new orchestrator session.";
-      renderLog();
     })();
   };
 
@@ -464,25 +765,47 @@ function buildVoiceThereWidget(
     const text = input.value.trim();
     if (!text) return;
     session.sendChat(text);
+    appendTranscriptBubble(transcript, "outgoing", text);
     input.value = "";
-    renderLog();
   });
 
   launcher.onclick = () => {
-    panel.style.display = panel.style.display === "none" ? "block" : "none";
+    setOpen(true);
+  };
+
+  closeBtn.onclick = () => {
+    setOpen(false);
+  };
+
+  const updateConfig = (partial: Partial<VoiceThereWidgetConfigV1>) => {
+    if (partial.preset !== undefined) runtime.preset = partial.preset;
+    if (partial.theme !== undefined) {
+      runtime.theme = { ...runtime.theme, ...partial.theme };
+    }
+    if (partial.launcherLabel !== undefined) {
+      runtime.launcherLabel = partial.launcherLabel;
+    }
+    if (partial.greeting !== undefined) runtime.greeting = partial.greeting;
+    if (partial.position !== undefined) runtime.position = partial.position;
+    if (partial.positionOffset !== undefined) {
+      runtime.positionOffset = partial.positionOffset;
+    }
+    if (partial.customCss !== undefined) runtime.customCss = partial.customCss;
+    applyAppearance();
   };
 
   return {
     open: () => {
-      panel.style.display = "block";
+      setOpen(true);
     },
     close: () => {
-      panel.style.display = "none";
+      setOpen(false);
     },
     destroy: () => {
       session?.disconnect();
       inboundAudio.remove();
       root.remove();
     },
+    updateConfig,
   };
 }

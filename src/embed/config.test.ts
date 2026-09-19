@@ -35,8 +35,51 @@ describe("parseVoiceThereWidgetConfigV1", () => {
     ).toEqual({ primary: "#abc" });
   });
 
+  it("accepts extended position, offsets, fonts, chat theme, and customCss", () => {
+    expect(
+      parseVoiceThereWidgetConfigV1({
+        v: 1,
+        position: "top-left",
+        positionOffset: { top: "8px", left: "1rem" },
+        customCss: ".vt-widget { opacity: 1; }",
+        theme: {
+          fontFamily: "Inter, sans-serif",
+          fontSize: "15px",
+          chat: {
+            incoming: {
+              fontFamily: "Georgia, serif",
+              fontSize: "14px",
+              color: "#ffffff",
+              bubble: "#334155",
+            },
+            outgoing: { bubble: "#0891b2", color: "#f8fafc" },
+            panelWidth: "360px",
+            panelHeight: "480px",
+            panelRadius: "16px",
+            headerBackground: "#0f172a",
+            inputBackground: "#1e293b",
+            inputColor: "#e2e8f0",
+          },
+        },
+      }),
+    ).toMatchObject({
+      position: "top-left",
+      positionOffset: { top: "8px", left: "1rem" },
+      customCss: ".vt-widget { opacity: 1; }",
+      theme: {
+        fontFamily: "Inter, sans-serif",
+        fontSize: "15px",
+        chat: {
+          incoming: { fontFamily: "Georgia, serif", fontSize: "14px" },
+        },
+      },
+    });
+  });
+
   it("rejects invalid JSON", () => {
-    expect(() => parseVoiceThereWidgetConfigJson("{")).toThrow(WidgetConfigError);
+    expect(() => parseVoiceThereWidgetConfigJson("{")).toThrow(
+      WidgetConfigError,
+    );
     expect(() => parseVoiceThereWidgetConfigJson("not json")).toThrow(
       /invalid/i,
     );
@@ -49,9 +92,9 @@ describe("parseVoiceThereWidgetConfigV1", () => {
   });
 
   it("rejects unknown top-level keys", () => {
-    expect(() =>
-      parseVoiceThereWidgetConfigV1({ v: 1, extra: true }),
-    ).toThrow(/Unknown config key/);
+    expect(() => parseVoiceThereWidgetConfigV1({ v: 1, extra: true })).toThrow(
+      /Unknown config key/,
+    );
   });
 
   it("rejects secret-like keys", () => {
@@ -78,10 +121,40 @@ describe("parseVoiceThereWidgetConfigV1", () => {
     ).toThrow(/hex color/i);
   });
 
+  it("rejects </style in customCss and unsafe fontFamily", () => {
+    expect(() =>
+      parseVoiceThereWidgetConfigV1({
+        v: 1,
+        customCss: "x </style> y",
+      }),
+    ).toThrow(/customCss must not contain <\/style/i);
+    expect(() =>
+      parseVoiceThereWidgetConfigV1({
+        v: 1,
+        theme: { fontFamily: "<script>" },
+      }),
+    ).toThrow(/must not contain < or >/);
+  });
+
+  it("rejects invalid CSS lengths", () => {
+    expect(() =>
+      parseVoiceThereWidgetConfigV1({
+        v: 1,
+        theme: { fontSize: "12pt" },
+      }),
+    ).toThrow(/CSS length/i);
+    expect(() =>
+      parseVoiceThereWidgetConfigV1({
+        v: 1,
+        positionOffset: { top: "not-a-length" },
+      }),
+    ).toThrow(/positionOffset.top/);
+  });
+
   it("rejects invalid position and mode", () => {
     expect(() =>
-      parseVoiceThereWidgetConfigV1({ v: 1, position: "top-center" }),
-    ).toThrow(/position must be/);
+      parseVoiceThereWidgetConfigV1({ v: 1, position: "middle" }),
+    ).toThrow(/position must be one of/);
     expect(() =>
       parseVoiceThereWidgetConfigV1({ v: 1, mode: "video" }),
     ).toThrow(/mode must be/);

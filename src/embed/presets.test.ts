@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { WIDGET_PRESET_IDS } from "./config.js";
-import { applyPreset, getWidgetPreset, resolveWidgetTheme } from "./presets.js";
+import {
+  applyPreset,
+  applyWidgetPosition,
+  getWidgetPreset,
+  resolveWidgetTheme,
+} from "./presets.js";
 
 function createTarget() {
   return {
@@ -18,8 +23,10 @@ describe("widget presets", () => {
       applyPreset(target, id);
       const token = getWidgetPreset(id).layoutToken;
       tokens.add(token);
-      expect((target.root as { dataset: Record<string, string> }).dataset
-        .voicetherePreset).toBe(token);
+      expect(
+        (target.root as { dataset: Record<string, string> }).dataset
+          .voicetherePreset,
+      ).toBe(token);
     }
     expect(tokens.size).toBe(WIDGET_PRESET_IDS.length);
   });
@@ -34,5 +41,21 @@ describe("widget presets", () => {
 
   it("resolveWidgetTheme keeps preset defaults without override", () => {
     expect(resolveWidgetTheme("voice-orb").primary).toBe("#06b6d4");
+  });
+
+  it("applyWidgetPosition supports top-left and custom offsets", () => {
+    const root = { style: {}, dataset: {} } as unknown as HTMLDivElement;
+    applyWidgetPosition(root, "top-left", "pill-dark");
+    expect(root.style.top).toBe("16px");
+    expect(root.style.left).toBe("16px");
+    expect(root.style.bottom).toBe("");
+
+    applyWidgetPosition(root, "custom", "pill-dark", {
+      top: "24px",
+      right: "12px",
+    });
+    expect(root.style.top).toBe("24px");
+    expect(root.style.right).toBe("12px");
+    expect(root.style.transform).toBe("");
   });
 });

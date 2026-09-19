@@ -158,3 +158,21 @@ setRootConnectionErrorHandler((error) => {
 
 `onSessionError` still runs for per-session UI. Details:
 [node-webrtc-rust `docs/connection-errors.md`](https://github.com/akirilyuk/node-webrtc-rust/blob/main/docs/connection-errors.md).
+
+## Embed widget customization
+
+Import from `@voicethere/client/embed`. CDN JSON (`VoiceThereWidgetConfigV1`) and inline options support `preset`, `position` (`bottom-right`, `top-left`, `custom`, …), `positionOffset`, `theme` (including `theme.chat` bubble fonts/colors), and `customCss`. Call `widget.updateConfig({ … })` to restyle without remounting during a live session.
+
+Opening the panel hides the launcher; use `widget.close()` or the header close control to show it again.
+
+| Class                                                          | Role                                                   |
+| -------------------------------------------------------------- | ------------------------------------------------------ |
+| `vt-widget`                                                    | Root fixed container; CSS variables below are set here |
+| `vt-widget-launcher`                                           | Closed-state pill button                               |
+| `vt-widget-panel`                                              | Open chat panel                                        |
+| `vt-widget-header` / `vt-widget-close`                         | Panel title row and close button                       |
+| `vt-widget-transcript`                                         | Scrollable message list                                |
+| `vt-widget-msg--incoming` / `--outgoing` / `--system`          | Message bubbles                                        |
+| `vt-widget-composer` / `vt-widget-input` / `vt-widget-connect` | Message input and Connect                              |
+
+CSS variables on `.vt-widget` include `--vt-color-primary`, `--vt-color-bg`, `--vt-color-text`, `--vt-font-ui`, `--vt-font-incoming`, `--vt-font-outgoing`, `--vt-bubble-incoming-bg`, `--vt-bubble-outgoing-bg`, `--vt-panel-width`, `--vt-panel-height`, and `--vt-panel-radius`. Export constants: `WIDGET_CSS_CLASSES`, `WIDGET_CSS_VARIABLES`.

@@ -19,11 +19,18 @@ import { BrowserSessionModeType } from "../browser/browser-session.js";
 import {
   createVoiceThereWidget,
   createVoiceThereWidgetAsync,
+  WIDGET_CSS_CLASSES,
+  WIDGET_CSS_VARIABLES,
 } from "./index.js";
 import { WIDGET_PRESET_IDS } from "./config.js";
 
 type MockElement = {
   tagName: string;
+  className: string;
+  classList: {
+    add: (...tokens: string[]) => void;
+    contains: (token: string) => boolean;
+  };
   style: Record<string, string>;
   dataset: Record<string, string>;
   children: MockElement[];
@@ -36,6 +43,7 @@ type MockElement = {
   remove: () => void;
   setAttribute: (name: string, value?: string) => void;
   getAttribute: (name: string) => string | null;
+  querySelector: (selector: string) => MockElement | null;
   addEventListener: (
     type: string,
     handler: (event: { key: string }) => void,
@@ -43,15 +51,50 @@ type MockElement = {
   click: () => void;
   placeholder?: string;
   title?: string;
+  type?: string;
   autoplay?: boolean;
   srcObject?: unknown;
   play?: ReturnType<typeof vi.fn>;
+  scrollTop?: number;
 };
 
 function createMockElement(tag: string): MockElement {
-  const el: MockElement = {
+  const classTokens = new Set<string>();
+  const el = {} as MockElement;
+  Object.defineProperty(el, "className", {
+    enumerable: true,
+    configurable: true,
+    get() {
+      return [...classTokens].join(" ");
+    },
+    set(value: string) {
+      classTokens.clear();
+      for (const token of value.split(/\s+/).filter(Boolean)) {
+        classTokens.add(token);
+      }
+    },
+  });
+  Object.assign(el, {
     tagName: tag.toUpperCase(),
-    style: {},
+    classList: {
+      add(...tokens: string[]) {
+        for (const t of tokens) {
+          classTokens.add(t);
+        }
+      },
+      contains(token: string) {
+        return classTokens.has(token);
+      },
+    },
+    style: (() => {
+      const style: Record<string, string> = {};
+      Object.assign(style, {
+        setProperty(name: string, value: string) {
+          style[name] = value;
+        },
+      });
+      return style;
+    })(),
     dataset: {},
     children: [],
     attrs: {},
@@ -73,6 +116,33 @@ function createMockElement(tag: string): MockElement {
     getAttribute(name: string) {
       return this.attrs[name] ?? null;
     },
+    querySelector(selector: string) {
+      const matchClass = selector.match(/^\.(.+)$/);
+      if (matchClass) {
+        const walk = (node: MockElement): MockElement | null => {
+          if (node.classList.contains(matchClass[1]!)) return node;
+          for (const child of node.children) {
+            const found = walk(child);
+            if (found) return found;
+          }
+          return null;
+        };
+        return walk(this);
+      }
+      const attrMatch = selector.match(/^\[([^\]]+)\]$/);
+      if (attrMatch) {
+        const walk = (node: MockElement): MockElement | null => {
+          if (node.attrs[attrMatch[1]!] !== undefined) return node;
+          for (const child of node.children) {
+            const found = walk(child);
+            if (found) return found;
+          }
+          return null;
+        };
+        return walk(this);
+      }
+      return null;
+    },
     addEventListener(type: string, handler: (event: { key: string }) => void) {
       if (type === "keydown") {
         this.onkeydown = handler;
@@ -81,7 +151,8 @@ function createMockElement(tag: string): MockElement {
     click() {
       this.onclick?.();
     },
-  };
+    scrollTop: 0,
+  });
   return el;
 }
 
@@ -95,7 +166,25 @@ function findByAttr(root: MockElement, attr: string): MockElement | undefined {
 }
 
 function findWidgetRoot(mount: MockElement): MockElement | undefined {
-  return mount.children.find((child) => child.dataset.voicetherePreset);
+  return mount.children.find(
+    (child) =>
+      child.dataset.voicetherePreset ||
+      child.classList.contains(WIDGET_CSS_CLASSES.root),
+  );
+}
+
+function findLauncher(root: MockElement): MockElement | undefined {
+  return root.children.find(
+    (c) =>
+      c.tagName === "BUTTON" &&
+      c.classList.contains(WIDGET_CSS_CLASSES.launcher),
+  );
+}
+
+function findPanel(root: MockElement): MockElement | undefined {
+  return root.children.find((c) =>
+    c.classList.contains(WIDGET_CSS_CLASSES.panel),
+  );
 }
 
 function findButtonByText(
@@ -257,9 +346,95 @@ describe("createVoiceThereWidget", () => {
     expect(root!.dataset.voicetherePosition).toBe("bottom-left");
     expect(root!.style.left).toBe("16px");
 
-    const launcher = root!.children.find((c) => c.tagName === "BUTTON");
+    const launcher = findLauncher(root!);
     expect(launcher?.style.borderRadius).toBe("50%");
     expect(launcher?.style.background).toBe("#112233");
+  });
+
+  it("hides launcher when open and restores on close", () => {
+    const widget = createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      mount: mount as unknown as HTMLElement,
+    });
+
+    const root = findWidgetRoot(mount)!;
+    const launcher = findLauncher(root)!;
+    const panel = findPanel(root)!;
+
+    widget.open();
+    expect(launcher.style.display).toBe("none");
+    expect(panel.style.display).toBe("flex");
+    expect(root.dataset.vtOpen).toBe("true");
+
+    widget.close();
+    expect(launcher.style.display).toBe("");
+    expect(panel.style.display).toBe("none");
+    expect(root.dataset.vtOpen).toBeUndefined();
+  });
+
+  it("applies top-left position and custom CSS style tag", () => {
+    createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      position: "top-left",
+      customCss: ".vt-widget-launcher { font-weight: bold; }",
+      mount: mount as unknown as HTMLElement,
+    });
+
+    const root = findWidgetRoot(mount)!;
+    expect(root.style.top).toBe("16px");
+    expect(root.style.left).toBe("16px");
+
+    const styleTag = root.children.find(
+      (c) =>
+        c.tagName === "STYLE" && c.attrs["data-vt-widget-custom"] !== undefined,
+    );
+    expect(styleTag?.textContent).toContain("font-weight: bold");
+  });
+
+  it("sets incoming/outgoing font CSS variables from theme.chat", () => {
+    createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      theme: {
+        chat: {
+          incoming: { fontFamily: "Georgia, serif", fontSize: "15px" },
+          outgoing: { fontFamily: "Courier, monospace", fontSize: "13px" },
+        },
+      },
+      mount: mount as unknown as HTMLElement,
+    });
+
+    const root = findWidgetRoot(mount)!;
+    expect(root.style["--vt-font-incoming"]).toBe("Georgia, serif");
+    expect(root.style["--vt-font-outgoing"]).toBe("Courier, monospace");
+    expect(root.style["--vt-font-size-incoming"]).toBe("15px");
+    expect(root.style["--vt-font-size-outgoing"]).toBe("13px");
+  });
+
+  it("updateConfig changes greeting without remounting session wiring", () => {
+    const widget = createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      greeting: "Hello",
+      mount: mount as unknown as HTMLElement,
+    });
+
+    const greeting = findByAttr(mount, "data-voicethere-greeting");
+    expect(greeting?.textContent).toBe("Hello");
+
+    widget.updateConfig({ greeting: "Updated greeting" });
+    expect(greeting?.textContent).toBe("Updated greeting");
+  });
+
+  it("exports stable CSS class and variable lists", () => {
+    expect(WIDGET_CSS_CLASSES.root).toBe("vt-widget");
+    expect(WIDGET_CSS_VARIABLES).toContain("--vt-color-primary");
   });
 
   it("throws when configUrl is passed to sync constructor", () => {
