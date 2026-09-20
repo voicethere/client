@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## 0.8.2 — 2026-09-19
+
+### Added
+
+- **Embed positions** — `position` supports corners, edges, center anchors, and `custom` with `positionOffset` (CSS lengths).
+- **Embed typography and chat chrome** — `theme.fontFamily`, `theme.fontSize`, and `theme.chat` for incoming/outgoing bubble fonts, colors, panel size, header/input colors.
+- **Custom CSS** — `customCss` (max 16 KiB) injects a scoped `<style data-vt-widget-custom>` via `textContent`.
+- **Stable hooks** — exported `WIDGET_CSS_CLASSES` and `WIDGET_CSS_VARIABLES`; `updateConfig()` reapplies appearance without tearing down an active session.
+
+### Changed
+
+- **Embed panel UX** — opening the chat hides the launcher pill; panel header includes a close control (`data-vt-open` on the root).
+- **Embed transcript** — message bubbles replace the debug `<pre>` log; `onControlMessage` appends incoming agent/chat text.
+
 ## 0.8.1 — 2026-09-01
 
 ### Fixed

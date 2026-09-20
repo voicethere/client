@@ -1,4 +1,9 @@
-import type { VoiceThereWidgetTheme, WidgetPresetId } from "./config.js";
+import type {
+  VoiceThereWidgetTheme,
+  WidgetPosition,
+  WidgetPositionOffset,
+  WidgetPresetId,
+} from "./config.js";
 
 export type WidgetPresetLayout = {
   launcherBorderRadius: string;
@@ -11,7 +16,9 @@ export type WidgetPresetLayout = {
   panelHeight: string;
   panelBorder: string;
   panelBoxShadow: string;
-  defaultTheme: Required<VoiceThereWidgetTheme>;
+  defaultTheme: Required<
+    Pick<VoiceThereWidgetTheme, "primary" | "background" | "text">
+  >;
   /** Distinct marker for tests — preset-specific layout token. */
   layoutToken: string;
 };
@@ -119,7 +126,9 @@ export type ApplyPresetTarget = {
   panel: HTMLDivElement;
 };
 
-export type ResolvedWidgetTheme = Required<VoiceThereWidgetTheme>;
+export type ResolvedWidgetTheme = Required<
+  Pick<VoiceThereWidgetTheme, "primary" | "background" | "text">
+>;
 
 export function resolveWidgetTheme(
   presetId: WidgetPresetId,
@@ -151,10 +160,11 @@ export function applyPreset(
   launcher.style.background = theme.primary;
   launcher.style.color = theme.text;
 
-  panel.style.borderRadius = preset.panelBorderRadius;
+  const chat = themeOverride?.chat;
+  panel.style.borderRadius = chat?.panelRadius ?? preset.panelBorderRadius;
   panel.style.padding = preset.panelPadding;
-  panel.style.width = preset.panelWidth;
-  panel.style.height = preset.panelHeight;
+  panel.style.width = chat?.panelWidth ?? preset.panelWidth;
+  panel.style.height = chat?.panelHeight ?? preset.panelHeight;
   panel.style.border = preset.panelBorder;
   panel.style.boxShadow = preset.panelBoxShadow;
   panel.style.background = theme.background;
@@ -171,26 +181,93 @@ export function applyPreset(
   return theme;
 }
 
+const INSET = "16px";
+
+function clearPositionInsets(root: HTMLElement): void {
+  root.style.top = "";
+  root.style.right = "";
+  root.style.bottom = "";
+  root.style.left = "";
+  root.style.transform = "";
+}
+
+/**
+ * Named corners/edges use a 16px inset. Center-aligned positions use 50% + translate
+ * so the widget stays anchored on the chosen axis when the panel opens.
+ */
 export function applyWidgetPosition(
   root: HTMLElement,
-  position: "bottom-right" | "bottom-left",
+  position: WidgetPosition,
   presetId: WidgetPresetId,
+  positionOffset?: WidgetPositionOffset,
 ): void {
-  root.style.bottom = "16px";
+  clearPositionInsets(root);
   root.dataset.voicetherePosition = position;
+
+  if (position === "custom") {
+    if (positionOffset?.top !== undefined) root.style.top = positionOffset.top;
+    if (positionOffset?.right !== undefined) {
+      root.style.right = positionOffset.right;
+    }
+    if (positionOffset?.bottom !== undefined) {
+      root.style.bottom = positionOffset.bottom;
+    }
+    if (positionOffset?.left !== undefined)
+      root.style.left = positionOffset.left;
+    if (presetId === "minimal-bar") {
+      root.style.width = positionOffset ? "" : "100%";
+    }
+    return;
+  }
 
   if (presetId === "minimal-bar") {
     root.style.left = "0";
     root.style.right = "0";
     root.style.bottom = "0";
+    root.style.width = "100%";
     return;
   }
 
-  if (position === "bottom-left") {
-    root.style.left = "16px";
-    root.style.right = "";
-  } else {
-    root.style.right = "16px";
-    root.style.left = "";
+  switch (position) {
+    case "bottom-right":
+      root.style.bottom = INSET;
+      root.style.right = INSET;
+      break;
+    case "bottom-left":
+      root.style.bottom = INSET;
+      root.style.left = INSET;
+      break;
+    case "top-right":
+      root.style.top = INSET;
+      root.style.right = INSET;
+      break;
+    case "top-left":
+      root.style.top = INSET;
+      root.style.left = INSET;
+      break;
+    case "bottom-center":
+      root.style.bottom = INSET;
+      root.style.left = "50%";
+      root.style.transform = "translateX(-50%)";
+      break;
+    case "top-center":
+      root.style.top = INSET;
+      root.style.left = "50%";
+      root.style.transform = "translateX(-50%)";
+      break;
+    case "center-right":
+      root.style.right = INSET;
+      root.style.top = "50%";
+      root.style.transform = "translateY(-50%)";
+      break;
+    case "center-left":
+      root.style.left = INSET;
+      root.style.top = "50%";
+      root.style.transform = "translateY(-50%)";
+      break;
+    default:
+      root.style.bottom = INSET;
+      root.style.right = INSET;
+      break;
   }
 }
