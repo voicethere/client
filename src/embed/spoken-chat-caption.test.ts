@@ -44,6 +44,83 @@ describe("createSpokenChatCaption", () => {
     expect(upserts).toEqual(["One two three"]);
   });
 
+  it("enabled + chat_reply without stream, then agent_speaking_start → words over time", () => {
+    const upserts: Array<[string, string]> = [];
+    const caption = createSpokenChatCaption({
+      enabled: true,
+      onUpsert: (id, text) => upserts.push([id, text]),
+    });
+
+    caption.handleControlMessage({
+      type: "chat_reply",
+      text: "Hello brave world",
+      utteranceId: "send-then-play",
+      durationMs: 900,
+    });
+
+    expect(upserts).toEqual([]);
+
+    caption.handleControlMessage({
+      type: "speech_event",
+      event: "agent_speaking_start",
+    });
+
+    expect(upserts).toEqual([["send-then-play", "Hello"]]);
+
+    vi.advanceTimersByTime(300);
+    expect(upserts.at(-1)).toEqual(["send-then-play", "Hello brave"]);
+
+    vi.advanceTimersByTime(300);
+    expect(upserts.at(-1)).toEqual(["send-then-play", "Hello brave world"]);
+    caption.dispose();
+  });
+
+  it("enabled + chat_reply without stream, no speaking_start → full text after 400ms", () => {
+    const upserts: Array<[string, string]> = [];
+    const caption = createSpokenChatCaption({
+      enabled: true,
+      onUpsert: (id, text) => upserts.push([id, text]),
+    });
+
+    caption.handleControlMessage({
+      type: "chat_reply",
+      text: "Data only message",
+      utteranceId: "data-only",
+    });
+
+    expect(upserts).toEqual([]);
+    vi.advanceTimersByTime(400);
+    expect(upserts).toEqual([["data-only", "Data only message"]]);
+
+    vi.advanceTimersByTime(2000);
+    expect(upserts).toEqual([["data-only", "Data only message"]]);
+    caption.dispose();
+  });
+
+  it("enabled + stream:true, no speaking_start → typewrite after 400ms fallback", () => {
+    const upserts: Array<[string, string]> = [];
+    const caption = createSpokenChatCaption({
+      enabled: true,
+      onUpsert: (id, text) => upserts.push([id, text]),
+    });
+
+    caption.handleControlMessage({
+      type: "chat_reply",
+      text: "One two three",
+      stream: true,
+      utteranceId: "stream-fallback",
+      durationMs: 900,
+    });
+
+    expect(upserts).toEqual([]);
+    vi.advanceTimersByTime(400);
+    expect(upserts).toEqual([["stream-fallback", "One"]]);
+
+    vi.advanceTimersByTime(300);
+    expect(upserts.at(-1)).toEqual(["stream-fallback", "One two"]);
+    caption.dispose();
+  });
+
   it("enabled + chat_reply stream → no full dump before start; words over time", () => {
     const upserts: Array<[string, string]> = [];
     const caption = createSpokenChatCaption({

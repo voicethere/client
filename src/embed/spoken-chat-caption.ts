@@ -16,6 +16,7 @@ type UtteranceState = {
   frozen: boolean;
   revealStarted: boolean;
   waitingForStart: boolean;
+  streamExplicit: boolean;
   startTimeoutId?: ReturnType<typeof setTimeout>;
   tickTimeoutId?: ReturnType<typeof setTimeout>;
 };
@@ -93,7 +94,6 @@ export function createSpokenChatCaption(
 ): SpokenChatCaption {
   let enabled = opts.enabled;
   let state: UtteranceState | null = null;
-  let speakingActive = false;
   let utteranceCounter = 0;
 
   const setTimeoutFn = opts.setTimeout ?? setTimeout;
@@ -161,13 +161,16 @@ export function createSpokenChatCaption(
     }
   };
 
-  const shouldTypewriteChatReply = (
-    payload: Record<string, unknown>,
-  ): boolean => {
-    if (!enabled) return false;
-    if (payload.stream === true) return true;
-    if (speakingActive) return true;
-    return false;
+  const snapToFull = (utterance: UtteranceState): void => {
+    if (utterance.frozen) return;
+    clearUtteranceTimers(utterance);
+    utterance.revealStarted = true;
+    utterance.waitingForStart = false;
+    utterance.visibleWordCount = utterance.words.length;
+    opts.onUpsert(utterance.utteranceId, utterance.words.join(" "));
+    if (state === utterance) {
+      state = null;
+    }
   };
 
   const resetUtteranceState = (): void => {
@@ -189,8 +192,9 @@ export function createSpokenChatCaption(
       typeof payload.durationMs === "number" && payload.durationMs > 0
         ? payload.durationMs
         : undefined;
+    const streamExplicit = payload.stream === true;
 
-    if (!shouldTypewriteChatReply(payload)) {
+    if (!enabled) {
       resetUtteranceState();
       opts.onUpsert(utteranceId, text);
       return;
@@ -224,30 +228,28 @@ export function createSpokenChatCaption(
       frozen: false,
       revealStarted: false,
       waitingForStart: true,
+      streamExplicit,
     };
 
     state.startTimeoutId = setTimeoutFn(() => {
-      if (state?.waitingForStart && !state.revealStarted) {
+      if (!state?.waitingForStart || state.revealStarted) return;
+      if (state.streamExplicit) {
         startReveal(state);
+      } else {
+        snapToFull(state);
       }
     }, START_FALLBACK_MS);
-
-    if (speakingActive) {
-      startReveal(state);
-    }
   };
 
   const handleSpeechEvent = (payload: Record<string, unknown>): void => {
     const event = typeof payload.event === "string" ? payload.event : "";
     if (event === "agent_speaking_start") {
-      speakingActive = true;
       if (state && (state.waitingForStart || !state.revealStarted)) {
         startReveal(state);
       }
       return;
     }
     if (event === "agent_speaking_end") {
-      speakingActive = false;
       if (state) {
         clearUtteranceTimers(state);
         state.visibleWordCount = state.words.length;
@@ -258,7 +260,6 @@ export function createSpokenChatCaption(
       return;
     }
     if (event === "barge_in") {
-      speakingActive = false;
       if (state) {
         clearUtteranceTimers(state);
         state.frozen = true;
@@ -291,7 +292,6 @@ export function createSpokenChatCaption(
 
   const dispose = (): void => {
     resetUtteranceState();
-    speakingActive = false;
   };
 
   return {
