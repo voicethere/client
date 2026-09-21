@@ -29,6 +29,7 @@ import {
   getWidgetPreset,
   type ResolvedWidgetTheme,
 } from "./presets.js";
+import { createSpokenChatCaption } from "./spoken-chat-caption.js";
 
 export type {
   VoiceThereWidgetConfigV1,
@@ -63,6 +64,7 @@ export type VoiceThereWidgetOptions = {
   position?: WidgetPosition;
   positionOffset?: WidgetPositionOffset;
   customCss?: string;
+  streamSpokenText?: boolean;
 };
 
 export type VoiceThereWidget = {
@@ -85,6 +87,7 @@ type ResolvedVoiceThereWidgetOptions = {
   position: WidgetPosition;
   positionOffset?: WidgetPositionOffset;
   customCss?: string;
+  streamSpokenText: boolean;
 };
 
 function mergeWidgetOptions(
@@ -122,6 +125,8 @@ function mergeWidgetOptions(
     position: inline.position ?? remote?.position ?? "bottom-right",
     positionOffset: inline.positionOffset ?? remote?.positionOffset,
     customCss: inline.customCss ?? remote?.customCss,
+    streamSpokenText:
+      inline.streamSpokenText ?? remote?.streamSpokenText ?? false,
   };
 }
 
@@ -303,7 +308,14 @@ function appendTranscriptBubble(
 ): void {
   const trimmed = text.trim();
   if (!trimmed) return;
+  transcript.append(createTranscriptBubbleElement(role, trimmed));
+  transcript.scrollTop = transcript.scrollHeight;
+}
 
+function createTranscriptBubbleElement(
+  role: TranscriptRole,
+  text: string,
+): HTMLDivElement {
   const bubble = document.createElement("div");
   bubble.className = WIDGET_CSS_CLASSES.msg;
   if (role === "incoming") {
@@ -332,9 +344,8 @@ function appendTranscriptBubble(
   bubble.style.borderRadius = "10px";
   bubble.style.lineHeight = "1.4";
   bubble.style.wordBreak = "break-word";
-  bubble.textContent = trimmed;
-  transcript.append(bubble);
-  transcript.scrollTop = transcript.scrollHeight;
+  bubble.textContent = text;
+  return bubble;
 }
 
 function incomingTextFromControlMessage(
@@ -556,6 +567,31 @@ function buildVoiceThereWidget(
   transcript.style.maxHeight = "260px";
   transcript.style.padding = "4px 0";
 
+  const incomingBubbleByUtteranceId = new Map<string, HTMLDivElement>();
+
+  const upsertIncomingTranscriptBubble = (
+    utteranceId: string,
+    visibleText: string,
+  ) => {
+    let bubble = incomingBubbleByUtteranceId.get(utteranceId);
+    if (!bubble) {
+      if (!visibleText.trim()) return;
+      bubble = createTranscriptBubbleElement("incoming", visibleText);
+      incomingBubbleByUtteranceId.set(utteranceId, bubble);
+      transcript.append(bubble);
+    } else {
+      bubble.textContent = visibleText;
+    }
+    transcript.scrollTop = transcript.scrollHeight;
+  };
+
+  let spokenCaption = runtime.streamSpokenText
+    ? createSpokenChatCaption({
+        enabled: true,
+        onUpsert: upsertIncomingTranscriptBubble,
+      })
+    : null;
+
   const composer = document.createElement("div");
   composer.className = WIDGET_CSS_CLASSES.composer;
   composer.style.marginTop = "8px";
@@ -699,6 +735,7 @@ function buildVoiceThereWidget(
       if (session) {
         session.disconnect();
         session = null;
+        spokenCaption?.dispose();
         hideSessionNotices();
         setStatusDisplay("Disconnected");
         connectBtn.textContent = "Connect";
@@ -734,6 +771,10 @@ function buildVoiceThereWidget(
         audioElement: inboundAudio,
         onDebugEvent: debug,
         onControlMessage: (payload) => {
+          if (spokenCaption) {
+            spokenCaption.handleControlMessage(payload);
+            return;
+          }
           const incoming = incomingTextFromControlMessage(payload);
           if (incoming) {
             appendTranscriptBubble(transcript, "incoming", incoming);
@@ -791,6 +832,22 @@ function buildVoiceThereWidget(
       runtime.positionOffset = partial.positionOffset;
     }
     if (partial.customCss !== undefined) runtime.customCss = partial.customCss;
+    if (partial.streamSpokenText !== undefined) {
+      runtime.streamSpokenText = partial.streamSpokenText;
+      if (runtime.streamSpokenText) {
+        if (!spokenCaption) {
+          spokenCaption = createSpokenChatCaption({
+            enabled: true,
+            onUpsert: upsertIncomingTranscriptBubble,
+          });
+        } else {
+          spokenCaption.setEnabled(true);
+        }
+      } else if (spokenCaption) {
+        spokenCaption.dispose();
+        spokenCaption = null;
+      }
+    }
     applyAppearance();
   };
 
@@ -802,6 +859,7 @@ function buildVoiceThereWidget(
       setOpen(false);
     },
     destroy: () => {
+      spokenCaption?.dispose();
       session?.disconnect();
       inboundAudio.remove();
       root.remove();

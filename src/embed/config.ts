@@ -81,6 +81,7 @@ export type VoiceThereWidgetConfigV1 = {
   positionOffset?: WidgetPositionOffset;
   customCss?: string;
   mode?: WidgetConfigMode;
+  streamSpokenText?: boolean;
 };
 
 const ALLOWED_TOP_LEVEL_KEYS = new Set([
@@ -97,6 +98,7 @@ const ALLOWED_TOP_LEVEL_KEYS = new Set([
   "positionOffset",
   "customCss",
   "mode",
+  "streamSpokenText",
 ]);
 
 const ALLOWED_THEME_KEYS = new Set([
@@ -405,6 +407,14 @@ function parseMode(value: unknown): WidgetConfigMode | undefined {
   return value;
 }
 
+function parseStreamSpokenText(value: unknown): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") {
+    throw new WidgetConfigError("streamSpokenText must be a boolean");
+  }
+  return value;
+}
+
 function parsePreset(value: unknown): WidgetPresetId | undefined {
   if (value === undefined) return undefined;
   const id = parseString(value, "preset", 64);
@@ -464,6 +474,7 @@ export function parseVoiceThereWidgetConfigV1(
     positionOffset: parsePositionOffset(input.positionOffset),
     customCss: parseCustomCss(input.customCss),
     mode: parseMode(input.mode),
+    streamSpokenText: parseStreamSpokenText(input.streamSpokenText),
   };
 }
 

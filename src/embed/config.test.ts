@@ -76,6 +76,21 @@ describe("parseVoiceThereWidgetConfigV1", () => {
     });
   });
 
+  it("accepts streamSpokenText boolean", () => {
+    expect(
+      parseVoiceThereWidgetConfigV1({
+        v: 1,
+        streamSpokenText: true,
+      }).streamSpokenText,
+    ).toBe(true);
+    expect(() =>
+      parseVoiceThereWidgetConfigV1({
+        v: 1,
+        streamSpokenText: "yes",
+      }),
+    ).toThrow(WidgetConfigError);
+  });
+
   it("rejects invalid JSON", () => {
     expect(() => parseVoiceThereWidgetConfigJson("{")).toThrow(
       WidgetConfigError,
