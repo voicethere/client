@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.8.3 — 2026-09-21
+
 ### Added
 
 - **Embed spoken chat captions** — optional `streamSpokenText` (default off) reveals incoming agent `chat_reply` text word-by-word during speech; snaps on `agent_speaking_end` and freezes on `barge_in`. Supports `chat_reply` fields `stream`, `utteranceId`, and `durationMs` on voice-control messages.
