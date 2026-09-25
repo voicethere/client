@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Key-only embed bootstrap** — `createVoiceThereWidgetAsync({ clientKey })` loads `{cdn}/widgets/by-key/{sha256(clientKey)}/bootstrap.json` (no `Authorization`; `credentials: "omit"`), caches the document in `sessionStorage` for repeat navigations, and merges optional published `widget` appearance. Legacy `configUrl` still fetches `config.json` only. Default hosts: `https://sessions.voicethere.io/v1` and `https://cdn.voicethere.io` (staging sessions host pairs with `https://cdn.voicethere.dev`).
+
 ## 0.8.3 — 2026-09-21
 
 ### Added

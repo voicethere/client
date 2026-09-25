@@ -9,6 +9,12 @@ import {
 } from "../browser/browser-session.js";
 import type { AudioInputState } from "../browser/microphone.js";
 import {
+  bootstrapIdentityFromDocument,
+  fetchWidgetBootstrapByClientKey,
+  WidgetBootstrapError,
+  type WidgetBootstrapIdentity,
+} from "./bootstrap.js";
+import {
   fetchVoiceThereWidgetConfig,
   WidgetConfigError,
   widgetConfigModeToSessionMode,
@@ -49,6 +55,28 @@ export {
 } from "./config.js";
 export { applyPreset, getWidgetPreset } from "./presets.js";
 export { WIDGET_CSS_CLASSES, WIDGET_CSS_VARIABLES } from "./css.js";
+export {
+  bootstrapIdentityFromDocument,
+  fetchWidgetBootstrapByClientKey,
+  parseWidgetBootstrapDocument,
+  parseWidgetBootstrapJson,
+  WidgetBootstrapError,
+  WIDGET_BOOTSTRAP_SESSION_CACHE_MS,
+  widgetBootstrapSessionCacheKey,
+  type WidgetBootstrapDocumentV1,
+  type WidgetBootstrapIdentity,
+} from "./bootstrap.js";
+export {
+  DEFAULT_WIDGET_API_BASE,
+  DEFAULT_WIDGET_CDN_BASE,
+  resolveWidgetCdnBase,
+  widgetBootstrapCdnUrl,
+} from "./hosts.js";
+export {
+  sha256HexUtf8,
+  WIDGET_KEY_HASH_FIXTURE_HEX,
+  WIDGET_KEY_HASH_FIXTURE_RAW,
+} from "./widget-key-hash.js";
 
 export type VoiceThereWidgetOptions = {
   clientKey: string;
@@ -93,17 +121,19 @@ type ResolvedVoiceThereWidgetOptions = {
 function mergeWidgetOptions(
   inline: VoiceThereWidgetOptions,
   remote?: VoiceThereWidgetConfigV1,
+  bootstrap?: WidgetBootstrapIdentity,
 ): ResolvedVoiceThereWidgetOptions {
-  const projectId = inline.projectId ?? remote?.projectId;
-  const apiBase = inline.apiBase ?? remote?.apiBase;
+  const projectId =
+    inline.projectId ?? bootstrap?.projectId ?? remote?.projectId;
+  const apiBase = inline.apiBase ?? bootstrap?.apiBase ?? remote?.apiBase;
   if (!projectId) {
     throw new Error(
-      "VoiceThere widget requires projectId (inline or from configUrl)",
+      "VoiceThere widget requires projectId (inline, CDN bootstrap, or configUrl)",
     );
   }
   if (!apiBase) {
     throw new Error(
-      "VoiceThere widget requires apiBase (inline or from configUrl)",
+      "VoiceThere widget requires apiBase (inline, CDN bootstrap, or configUrl)",
     );
   }
 
@@ -133,8 +163,8 @@ function mergeWidgetOptions(
 export async function createVoiceThereWidgetAsync(
   options: VoiceThereWidgetOptions,
 ): Promise<VoiceThereWidget> {
-  let remote: VoiceThereWidgetConfigV1 | undefined;
   if (options.configUrl) {
+    let remote: VoiceThereWidgetConfigV1 | undefined;
     try {
       remote = await fetchVoiceThereWidgetConfig(options.configUrl);
     } catch (error) {
@@ -147,8 +177,31 @@ export async function createVoiceThereWidgetAsync(
       );
       remote = undefined;
     }
+    return buildVoiceThereWidget(mergeWidgetOptions(options, remote));
   }
-  return buildVoiceThereWidget(mergeWidgetOptions(options, remote));
+
+  let bootstrapIdentity: WidgetBootstrapIdentity | undefined;
+  let appearance: VoiceThereWidgetConfigV1 | undefined;
+  try {
+    const bootstrap = await fetchWidgetBootstrapByClientKey({
+      clientKey: options.clientKey,
+      apiBase: options.apiBase,
+    });
+    bootstrapIdentity = bootstrapIdentityFromDocument(bootstrap);
+    appearance = bootstrap.widget ?? undefined;
+  } catch (error) {
+    const detail =
+      error instanceof WidgetBootstrapError || error instanceof Error
+        ? error.message
+        : String(error);
+    console.warn(`VoiceThere widget: CDN bootstrap unavailable: ${detail}`);
+    bootstrapIdentity = undefined;
+    appearance = undefined;
+  }
+
+  return buildVoiceThereWidget(
+    mergeWidgetOptions(options, appearance, bootstrapIdentity),
+  );
 }
 
 export function createVoiceThereWidget(
