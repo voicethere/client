@@ -22,6 +22,17 @@ describe("embed hosts", () => {
     );
   });
 
+  it("strips trailing slashes from the CDN base", () => {
+    expect(
+      widgetBootstrapCdnUrl(
+        "https://cdn.voicethere.io///",
+        WIDGET_KEY_HASH_FIXTURE_HEX,
+      ),
+    ).toBe(
+      `https://cdn.voicethere.io/widgets/by-key/${WIDGET_KEY_HASH_FIXTURE_HEX}/bootstrap.json`,
+    );
+  });
+
   it("builds bootstrap CDN URL shape", () => {
     expect(
       widgetBootstrapCdnUrl(

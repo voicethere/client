@@ -22,6 +22,10 @@ export function widgetBootstrapCdnUrl(
   cdnBase: string,
   keySha256Hex: string,
 ): string {
-  const base = cdnBase.replace(/\/+$/, "");
+  let end = cdnBase.length;
+  while (end > 0 && cdnBase.charCodeAt(end - 1) === 47) {
+    end -= 1;
+  }
+  const base = cdnBase.slice(0, end);
   return `${base}/widgets/by-key/${keySha256Hex}/bootstrap.json`;
 }
