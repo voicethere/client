@@ -16,7 +16,7 @@ function bytesToLowerHex(bytes: ArrayBuffer): string {
  * Matches platform `sha256HexUtf8` (UTF-8 → SHA-256 → hex).
  */
 export async function sha256HexUtf8(rawUtf8: string): Promise<string> {
-  if (globalThis.crypto?.subtle?.digest) {
+  if (typeof globalThis.crypto?.subtle?.digest === "function") {
     const data = new TextEncoder().encode(rawUtf8);
     const digest = await crypto.subtle.digest("SHA-256", data);
     return bytesToLowerHex(digest);
