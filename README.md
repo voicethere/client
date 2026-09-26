@@ -161,7 +161,9 @@ setRootConnectionErrorHandler((error) => {
 
 ## Embed widget customization
 
-Import from `@voicethere/client/embed`. CDN JSON (`VoiceThereWidgetConfigV1`) and inline options support `preset`, `position` (`bottom-right`, `top-left`, `custom`, …), `positionOffset`, `theme` (including `theme.chat` bubble fonts/colors), and `customCss`. Call `widget.updateConfig({ … })` to restyle without remounting during a live session.
+Import from `@voicethere/client/embed`. For production snippets, pass only a **client API key** (`vthc_…`) to `createVoiceThereWidgetAsync({ clientKey })`; the client fetches bootstrap JSON from the CDN (project id, session API base, and optional published appearance). Staging pages can pass `apiBase: "https://sessions.voicethere.dev/v1"` so the client uses the staging CDN. Legacy integrations may still pass `configUrl` (stable `config.json`) or inline `projectId` / `apiBase`.
+
+CDN JSON (`VoiceThereWidgetConfigV1`) and inline options support `preset`, `position` (`bottom-right`, `top-left`, `custom`, …), `positionOffset`, `theme` (including `theme.chat` bubble fonts/colors), and `customCss`. Call `widget.updateConfig({ … })` to restyle without remounting during a live session.
 
 Opening the panel hides the launcher; use `widget.close()` or the header close control to show it again.
 

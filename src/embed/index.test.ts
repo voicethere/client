@@ -21,6 +21,10 @@ import {
   createVoiceThereWidgetAsync,
   WIDGET_CSS_CLASSES,
   WIDGET_CSS_VARIABLES,
+  WIDGET_KEY_HASH_FIXTURE_HEX,
+  WIDGET_KEY_HASH_FIXTURE_RAW,
+  widgetBootstrapCdnUrl,
+  DEFAULT_WIDGET_CDN_BASE,
 } from "./index.js";
 import { WIDGET_PRESET_IDS } from "./config.js";
 
@@ -201,10 +205,12 @@ function findButtonByText(
 
 let mount: MockElement;
 let createdElements: MockElement[];
+let sessionStorageData: Map<string, string>;
 
 beforeEach(() => {
   createdElements = [];
   mount = createMockElement("div");
+  sessionStorageData = new Map<string, string>();
 
   const createElement = (tag: string): MockElement => {
     const el = createMockElement(tag);
@@ -231,6 +237,19 @@ beforeEach(() => {
     head: createMockElement("head"),
     createElement,
     getElementById: () => null,
+  });
+
+  vi.stubGlobal("sessionStorage", {
+    getItem: (key: string) => sessionStorageData.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      sessionStorageData.set(key, value);
+    },
+    removeItem: (key: string) => {
+      sessionStorageData.delete(key);
+    },
+    clear: () => {
+      sessionStorageData.clear();
+    },
   });
 
   vi.stubGlobal(
@@ -626,6 +645,185 @@ describe("createVoiceThereWidgetAsync", () => {
           mount: mount as unknown as HTMLElement,
         }),
       ).rejects.toThrow(/requires projectId/);
+    });
+  });
+
+  describe("key-only CDN bootstrap", () => {
+    const bootstrapProjectId = "11111111-1111-4111-8111-111111111111";
+
+    function mockBootstrapResponse(
+      body: Record<string, unknown>,
+      status = 200,
+    ) {
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: status >= 200 && status < 300,
+        status,
+        text: async () => JSON.stringify(body),
+      } as Response);
+    }
+
+    const widgetAppearance = {
+      v: 1,
+      preset: "rounded-card",
+      launcherLabel: "Help",
+      greeting: "Hello from bootstrap",
+      position: "bottom-left",
+      mode: "chat",
+    };
+
+    const publishedBootstrap = {
+      project_id: bootstrapProjectId,
+      api_base: "https://sessions.voicethere.io/v1",
+      public_id: "w_test",
+      published: true,
+      published_revision: 1,
+      widget: widgetAppearance,
+    };
+
+    it("boots from bootstrap by client key hash with widget appearance", async () => {
+      mockBootstrapResponse(publishedBootstrap);
+
+      await createVoiceThereWidgetAsync({
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        mount: mount as unknown as HTMLElement,
+      });
+
+      const expectedUrl = widgetBootstrapCdnUrl(
+        DEFAULT_WIDGET_CDN_BASE,
+        WIDGET_KEY_HASH_FIXTURE_HEX,
+      );
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledWith(
+        expectedUrl,
+        expect.objectContaining({ credentials: "omit" }),
+      );
+      const fetchInit = vi.mocked(fetch).mock.calls[0]?.[1] as
+        RequestInit | undefined;
+      expect(fetchInit?.headers).toBeUndefined();
+
+      const root = findWidgetRoot(mount);
+      expect(root?.dataset.voicetherePreset).toBe("rounded-card");
+      expect(root?.dataset.voicetherePosition).toBe("bottom-left");
+
+      const connectBtn = findButtonByText(mount, "Connect");
+      connectBtn!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(startSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: bootstrapProjectId,
+          apiBase: "https://sessions.voicethere.io/v1",
+          headers: { Authorization: `Bearer ${WIDGET_KEY_HASH_FIXTURE_RAW}` },
+        }),
+      );
+    });
+
+    it("uses built-in defaults when bootstrap widget is null", async () => {
+      mockBootstrapResponse({
+        ...publishedBootstrap,
+        widget: null,
+        published: false,
+        published_revision: 0,
+      });
+
+      await createVoiceThereWidgetAsync({
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        mount: mount as unknown as HTMLElement,
+      });
+
+      const root = findWidgetRoot(mount);
+      expect(root?.dataset.voicetherePreset).toBe("pill-dark");
+      const launcher = root!.children.find((c) => c.tagName === "BUTTON");
+      expect(launcher?.textContent).toBe("Chat");
+    });
+
+    it("inline options override bootstrap identity and appearance", async () => {
+      mockBootstrapResponse(publishedBootstrap);
+
+      await createVoiceThereWidgetAsync({
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        projectId: "inline-project",
+        apiBase: "https://inline.example/v1",
+        preset: "minimal-bar",
+        mount: mount as unknown as HTMLElement,
+      });
+
+      const root = findWidgetRoot(mount);
+      expect(root?.dataset.voicetherePreset).toBe("minimal-bar");
+
+      const connectBtn = findButtonByText(mount, "Connect");
+      connectBtn!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(startSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: "inline-project",
+          apiBase: "https://inline.example/v1",
+        }),
+      );
+    });
+
+    it("uses staging CDN when apiBase is staging sessions host", async () => {
+      mockBootstrapResponse({
+        ...publishedBootstrap,
+        api_base: "https://sessions.voicethere.dev/v1",
+      });
+
+      await createVoiceThereWidgetAsync({
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        apiBase: "https://sessions.voicethere.dev/v1",
+        mount: mount as unknown as HTMLElement,
+      });
+
+      expect(fetch).toHaveBeenCalledWith(
+        widgetBootstrapCdnUrl(
+          "https://cdn.voicethere.dev",
+          WIDGET_KEY_HASH_FIXTURE_HEX,
+        ),
+        expect.any(Object),
+      );
+    });
+
+    it("throws when bootstrap fails and inline bootstrap is missing", async () => {
+      mockBootstrapResponse({}, 404);
+
+      await expect(
+        createVoiceThereWidgetAsync({
+          clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+          mount: mount as unknown as HTMLElement,
+        }),
+      ).rejects.toThrow(/requires projectId/);
+    });
+
+    it("mounts from inline options when bootstrap fetch fails", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.mocked(fetch).mockRejectedValueOnce(new Error("network down"));
+
+      await createVoiceThereWidgetAsync({
+        clientKey: "key",
+        projectId: "inline-project",
+        apiBase: "https://inline.example/v1",
+        mount: mount as unknown as HTMLElement,
+      });
+
+      expect(warnSpy).toHaveBeenCalled();
+      expect(findWidgetRoot(mount)).toBeDefined();
+      warnSpy.mockRestore();
+    });
+
+    it("sessionStorage cache skips a second bootstrap GET", async () => {
+      mockBootstrapResponse(publishedBootstrap);
+      mockBootstrapResponse(publishedBootstrap);
+
+      const opts = {
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        mount: mount as unknown as HTMLElement,
+      };
+
+      await createVoiceThereWidgetAsync(opts);
+      await createVoiceThereWidgetAsync(opts);
+
+      expect(fetch).toHaveBeenCalledTimes(1);
     });
   });
 });
