@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.10.0 — 2026-10-04
+
+### Changed
+
+- **Faster widget publishes via key pointer lookup** — `createVoiceThereWidgetAsync({ clientKey })` now looks up a small, long-cached pointer from your client key to your project, then loads one shared project bootstrap. Publishing a widget update only has to refresh that one document instead of one copy per key. The pointer is remembered in `localStorage` and dropped automatically if the session API rejects the key.
+- **Automatic fallback** — if a deployment does not serve key pointers yet (or the pointer or project bootstrap is missing), the widget falls back to the previous per-key bootstrap URL, so existing embeds keep working without changes.
+
+### Added
+
+- `startSession` failures from a rejected `POST /sessions` now include `httpStatus`.
+- Exported `widgetKeyMapUrl` and `widgetProjectBootstrapUrl` URL builders.
+
 ## 0.9.0 — 2026-09-26
 
 ### Added

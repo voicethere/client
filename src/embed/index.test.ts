@@ -24,6 +24,8 @@ import {
   WIDGET_KEY_HASH_FIXTURE_HEX,
   WIDGET_KEY_HASH_FIXTURE_RAW,
   widgetBootstrapCdnUrl,
+  widgetKeyMapUrl,
+  widgetProjectBootstrapUrl,
   DEFAULT_WIDGET_CDN_BASE,
 } from "./index.js";
 import { WIDGET_PRESET_IDS } from "./config.js";
@@ -206,11 +208,13 @@ function findButtonByText(
 let mount: MockElement;
 let createdElements: MockElement[];
 let sessionStorageData: Map<string, string>;
+let localStorageData: Map<string, string>;
 
 beforeEach(() => {
   createdElements = [];
   mount = createMockElement("div");
   sessionStorageData = new Map<string, string>();
+  localStorageData = new Map<string, string>();
 
   const createElement = (tag: string): MockElement => {
     const el = createMockElement(tag);
@@ -249,6 +253,19 @@ beforeEach(() => {
     },
     clear: () => {
       sessionStorageData.clear();
+    },
+  });
+
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => localStorageData.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      localStorageData.set(key, value);
+    },
+    removeItem: (key: string) => {
+      localStorageData.delete(key);
+    },
+    clear: () => {
+      localStorageData.clear();
     },
   });
 
@@ -651,15 +668,50 @@ describe("createVoiceThereWidgetAsync", () => {
   describe("key-only CDN bootstrap", () => {
     const bootstrapProjectId = "11111111-1111-4111-8111-111111111111";
 
+    const keyMapUrl = widgetKeyMapUrl(
+      DEFAULT_WIDGET_CDN_BASE,
+      WIDGET_KEY_HASH_FIXTURE_HEX,
+    );
+    const projectUrl = widgetProjectBootstrapUrl(
+      DEFAULT_WIDGET_CDN_BASE,
+      "w_test",
+    );
+    const legacyUrl = widgetBootstrapCdnUrl(
+      DEFAULT_WIDGET_CDN_BASE,
+      WIDGET_KEY_HASH_FIXTURE_HEX,
+    );
+    const pointerKey = `vt:kmap:${WIDGET_KEY_HASH_FIXTURE_HEX}`;
+
+    type CdnRoute = { status?: number; body?: unknown; raw?: string };
+
+    /** Serve CDN GETs by URL; unlisted URLs answer 404. */
+    function routeCdn(routes: Record<string, CdnRoute>) {
+      vi.mocked(fetch).mockImplementation((async (input: unknown) => {
+        const route = routes[String(input)] ?? { status: 404, body: {} };
+        const status = route.status ?? 200;
+        return {
+          ok: status >= 200 && status < 300,
+          status,
+          text: async () => route.raw ?? JSON.stringify(route.body ?? {}),
+        } as Response;
+      }) as typeof fetch);
+    }
+
+    const pointerRoute: CdnRoute = { body: { v: 1, public_id: "w_test" } };
+
+    function fetchedUrls(): string[] {
+      return vi.mocked(fetch).mock.calls.map((call) => String(call[0]));
+    }
+
     function mockBootstrapResponse(
       body: Record<string, unknown>,
       status = 200,
+      cdnBase = DEFAULT_WIDGET_CDN_BASE,
     ) {
-      vi.mocked(fetch).mockResolvedValueOnce({
-        ok: status >= 200 && status < 300,
-        status,
-        text: async () => JSON.stringify(body),
-      } as Response);
+      routeCdn({
+        [widgetKeyMapUrl(cdnBase, WIDGET_KEY_HASH_FIXTURE_HEX)]: pointerRoute,
+        [widgetProjectBootstrapUrl(cdnBase, "w_test")]: { status, body },
+      });
     }
 
     const widgetAppearance = {
@@ -688,18 +740,15 @@ describe("createVoiceThereWidgetAsync", () => {
         mount: mount as unknown as HTMLElement,
       });
 
-      const expectedUrl = widgetBootstrapCdnUrl(
-        DEFAULT_WIDGET_CDN_BASE,
-        WIDGET_KEY_HASH_FIXTURE_HEX,
-      );
-      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetchedUrls()).toEqual([keyMapUrl, projectUrl]);
       expect(fetch).toHaveBeenCalledWith(
-        expectedUrl,
+        projectUrl,
         expect.objectContaining({ credentials: "omit" }),
       );
-      const fetchInit = vi.mocked(fetch).mock.calls[0]?.[1] as
-        RequestInit | undefined;
-      expect(fetchInit?.headers).toBeUndefined();
+      for (const call of vi.mocked(fetch).mock.calls) {
+        expect((call[1] as RequestInit | undefined)?.headers).toBeUndefined();
+      }
+      expect(localStorageData.get(pointerKey)).toBe("w_test");
 
       const root = findWidgetRoot(mount);
       expect(root?.dataset.voicetherePreset).toBe("rounded-card");
@@ -764,10 +813,14 @@ describe("createVoiceThereWidgetAsync", () => {
     });
 
     it("uses staging CDN when apiBase is staging sessions host", async () => {
-      mockBootstrapResponse({
-        ...publishedBootstrap,
-        api_base: "https://sessions.voicethere.dev/v1",
-      });
+      mockBootstrapResponse(
+        {
+          ...publishedBootstrap,
+          api_base: "https://sessions.voicethere.dev/v1",
+        },
+        200,
+        "https://cdn.voicethere.dev",
+      );
 
       await createVoiceThereWidgetAsync({
         clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
@@ -776,10 +829,7 @@ describe("createVoiceThereWidgetAsync", () => {
       });
 
       expect(fetch).toHaveBeenCalledWith(
-        widgetBootstrapCdnUrl(
-          "https://cdn.voicethere.dev",
-          WIDGET_KEY_HASH_FIXTURE_HEX,
-        ),
+        widgetProjectBootstrapUrl("https://cdn.voicethere.dev", "w_test"),
         expect.any(Object),
       );
     });
@@ -813,7 +863,6 @@ describe("createVoiceThereWidgetAsync", () => {
 
     it("sessionStorage cache skips a second bootstrap GET", async () => {
       mockBootstrapResponse(publishedBootstrap);
-      mockBootstrapResponse(publishedBootstrap);
 
       const opts = {
         clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
@@ -823,7 +872,225 @@ describe("createVoiceThereWidgetAsync", () => {
       await createVoiceThereWidgetAsync(opts);
       await createVoiceThereWidgetAsync(opts);
 
-      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("uses a cached pointer and only fetches the project bootstrap", async () => {
+      localStorageData.set(pointerKey, "w_test");
+      mockBootstrapResponse(publishedBootstrap);
+
+      await createVoiceThereWidgetAsync({
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        mount: mount as unknown as HTMLElement,
+      });
+
+      expect(fetchedUrls()).toEqual([projectUrl]);
+    });
+
+    it("falls back to the legacy per-key URL when the pointer is 404", async () => {
+      routeCdn({ [legacyUrl]: { body: publishedBootstrap } });
+
+      await createVoiceThereWidgetAsync({
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        mount: mount as unknown as HTMLElement,
+      });
+
+      expect(fetchedUrls()).toEqual([keyMapUrl, legacyUrl]);
+      expect(localStorageData.has(pointerKey)).toBe(false);
+      const connectBtn = findButtonByText(mount, "Connect");
+      connectBtn!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(startSession).toHaveBeenCalledWith(
+        expect.objectContaining({ projectId: bootstrapProjectId }),
+      );
+    });
+
+    it("clears the pointer and uses legacy when the project bootstrap is 404", async () => {
+      localStorageData.set(pointerKey, "w_test");
+      routeCdn({ [legacyUrl]: { body: publishedBootstrap } });
+
+      await createVoiceThereWidgetAsync({
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        mount: mount as unknown as HTMLElement,
+      });
+
+      expect(fetchedUrls()).toEqual([projectUrl, legacyUrl]);
+      expect(localStorageData.has(pointerKey)).toBe(false);
+    });
+
+    it("falls back to legacy when the pointer answers 403", async () => {
+      routeCdn({
+        [keyMapUrl]: { status: 403 },
+        [legacyUrl]: { body: publishedBootstrap },
+      });
+
+      await createVoiceThereWidgetAsync({
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        mount: mount as unknown as HTMLElement,
+      });
+
+      expect(fetchedUrls()).toEqual([keyMapUrl, legacyUrl]);
+      expect(localStorageData.has(pointerKey)).toBe(false);
+    });
+
+    it("clears the pointer and uses legacy when the project bootstrap is 403", async () => {
+      localStorageData.set(pointerKey, "w_test");
+      routeCdn({
+        [projectUrl]: { status: 403 },
+        [legacyUrl]: { body: publishedBootstrap },
+      });
+
+      await createVoiceThereWidgetAsync({
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        mount: mount as unknown as HTMLElement,
+      });
+
+      expect(fetchedUrls()).toEqual([projectUrl, legacyUrl]);
+      expect(localStorageData.has(pointerKey)).toBe(false);
+    });
+
+    it("uses defaults when pointer and legacy are both 404", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      routeCdn({});
+
+      await expect(
+        createVoiceThereWidgetAsync({
+          clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+          mount: mount as unknown as HTMLElement,
+        }),
+      ).rejects.toThrow(/requires projectId/);
+      expect(fetchedUrls()).toEqual([keyMapUrl, legacyUrl]);
+
+      await createVoiceThereWidgetAsync({
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        projectId: "inline-project",
+        apiBase: "https://inline.example/v1",
+        mount: mount as unknown as HTMLElement,
+      });
+      expect(findWidgetRoot(mount)?.dataset.voicetherePreset).toBe("pill-dark");
+      warnSpy.mockRestore();
+    });
+
+    it.each([
+      ["wrong version", { v: 2, public_id: "w_test" }],
+      ["bad public_id", { v: 1, public_id: "../etc" }],
+      ["missing public_id", { v: 1 }],
+    ])("treats an invalid pointer (%s) like 404", async (_label, body) => {
+      routeCdn({
+        [keyMapUrl]: { body },
+        [legacyUrl]: { body: publishedBootstrap },
+      });
+
+      await createVoiceThereWidgetAsync({
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        mount: mount as unknown as HTMLElement,
+      });
+
+      expect(fetchedUrls()).toEqual([keyMapUrl, legacyUrl]);
+      expect(localStorageData.has(pointerKey)).toBe(false);
+    });
+
+    it("treats non-JSON pointer bodies like 404", async () => {
+      routeCdn({
+        [keyMapUrl]: { raw: "<html>" },
+        [legacyUrl]: { body: publishedBootstrap },
+      });
+
+      await createVoiceThereWidgetAsync({
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        mount: mount as unknown as HTMLElement,
+      });
+
+      expect(fetchedUrls()).toEqual([keyMapUrl, legacyUrl]);
+    });
+
+    it("does not mask a 5xx on the project bootstrap with legacy", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      localStorageData.set(pointerKey, "w_test");
+      routeCdn({
+        [projectUrl]: { status: 503 },
+        [legacyUrl]: { body: publishedBootstrap },
+      });
+
+      await expect(
+        createVoiceThereWidgetAsync({
+          clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+          mount: mount as unknown as HTMLElement,
+        }),
+      ).rejects.toThrow(/requires projectId/);
+      expect(fetchedUrls()).toEqual([projectUrl]);
+      expect(localStorageData.get(pointerKey)).toBe("w_test");
+      warnSpy.mockRestore();
+    });
+
+    it("still resolves when localStorage and sessionStorage throw", async () => {
+      const boom = () => {
+        throw new Error("storage blocked");
+      };
+      vi.stubGlobal("localStorage", {
+        getItem: boom,
+        setItem: boom,
+        removeItem: boom,
+      });
+      vi.stubGlobal("sessionStorage", {
+        getItem: boom,
+        setItem: boom,
+        removeItem: boom,
+      });
+      mockBootstrapResponse(publishedBootstrap);
+
+      await createVoiceThereWidgetAsync({
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        mount: mount as unknown as HTMLElement,
+      });
+
+      expect(fetchedUrls()).toEqual([keyMapUrl, projectUrl]);
+      expect(findWidgetRoot(mount)?.dataset.voicetherePreset).toBe(
+        "rounded-card",
+      );
+    });
+
+    it.each([401, 403])(
+      "clears the cached pointer when session creation is rejected with %i",
+      async (httpStatus) => {
+        mockBootstrapResponse(publishedBootstrap);
+        startSession.mockResolvedValueOnce({
+          ok: false,
+          code: "HTTP_ERROR",
+          message: `POST /sessions failed (${httpStatus}): denied`,
+          httpStatus,
+        });
+
+        await createVoiceThereWidgetAsync({
+          clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+          mount: mount as unknown as HTMLElement,
+        });
+        expect(localStorageData.get(pointerKey)).toBe("w_test");
+
+        findButtonByText(mount, "Connect")!.click();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        expect(localStorageData.has(pointerKey)).toBe(false);
+      },
+    );
+
+    it("keeps the cached pointer when session creation fails with 500", async () => {
+      mockBootstrapResponse(publishedBootstrap);
+      startSession.mockResolvedValueOnce({
+        ok: false,
+        code: "HTTP_ERROR",
+        message: "POST /sessions failed (500): boom",
+        httpStatus: 500,
+      });
+
+      await createVoiceThereWidgetAsync({
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        mount: mount as unknown as HTMLElement,
+      });
+      findButtonByText(mount, "Connect")!.click();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(localStorageData.get(pointerKey)).toBe("w_test");
     });
   });
 });

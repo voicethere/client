@@ -5,12 +5,15 @@ import {
 } from "./config.js";
 import {
   DEFAULT_WIDGET_API_BASE,
+  isValidWidgetPublicId,
   resolveWidgetCdnBase,
   widgetBootstrapCdnUrl,
+  widgetKeyMapUrl,
+  widgetProjectBootstrapUrl,
 } from "./hosts.js";
 import { sha256HexUtf8 } from "./widget-key-hash.js";
 
-/** Bootstrap JSON published at CDN `widgets/by-key/{sha256}/bootstrap.json`. */
+/** Bootstrap JSON published at CDN `widgets/{publicId}/bootstrap.json`. */
 export type WidgetBootstrapDocumentV1 = {
   project_id: string;
   api_base: string;
@@ -193,6 +196,93 @@ export type FetchWidgetBootstrapOptions = {
   nowMs?: number;
 };
 
+const KEY_POINTER_PREFIX = "vt:kmap:";
+
+function readLocalStorage(): Storage | null {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    return localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function readStoredPointer(keyHex: string): string | null {
+  try {
+    const value = readLocalStorage()?.getItem(`${KEY_POINTER_PREFIX}${keyHex}`);
+    return isValidWidgetPublicId(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredPointer(keyHex: string, publicId: string): void {
+  try {
+    readLocalStorage()?.setItem(`${KEY_POINTER_PREFIX}${keyHex}`, publicId);
+  } catch {
+    /* storage unavailable or full */
+  }
+}
+
+function removeStoredPointer(keyHex: string): void {
+  try {
+    readLocalStorage()?.removeItem(`${KEY_POINTER_PREFIX}${keyHex}`);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/** Drop the cached key pointer, e.g. after the session API rejects the key. */
+export async function clearWidgetKeyPointer(clientKey: string): Promise<void> {
+  const trimmed = clientKey.trim();
+  if (!trimmed) return;
+  removeStoredPointer(await sha256HexUtf8(trimmed));
+}
+
+async function getCdn(fetchImpl: typeof fetch, url: string): Promise<Response> {
+  try {
+    return await fetchImpl(url, {
+      method: "GET",
+      credentials: "omit",
+      cache: "no-store",
+    });
+  } catch {
+    throw new WidgetBootstrapError(`Failed to fetch bootstrap from ${url}`);
+  }
+}
+
+async function readBootstrapDocument(
+  response: Response,
+  url: string,
+): Promise<WidgetBootstrapDocumentV1> {
+  if (!response.ok) {
+    throw new WidgetBootstrapError(
+      `Bootstrap fetch failed (${response.status}) from ${url}`,
+    );
+  }
+  return parseWidgetBootstrapJson(await response.text());
+}
+
+/** The CDN may answer a missing object with 403 as well as 404. */
+function isAbsentStatus(status: number): boolean {
+  return status === 403 || status === 404;
+}
+
+/** Returns a valid `public_id`, or null when the pointer body is not v1. */
+function parsePointerBody(text: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+    if (record.v !== 1) return null;
+    return isValidWidgetPublicId(record.public_id) ? record.public_id : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchWidgetBootstrapByClientKey(
   options: FetchWidgetBootstrapOptions,
 ): Promise<WidgetBootstrapDocumentV1> {
@@ -204,31 +294,60 @@ export async function fetchWidgetBootstrapByClientKey(
   const cdnBase = options.cdnBase?.trim() || resolveWidgetCdnBase(apiBase);
   const cacheKey = widgetBootstrapSessionCacheKey(cdnBase, clientKey);
   const nowMs = options.nowMs ?? Date.now();
-  const cached = readCachedBootstrap(cacheKey, nowMs);
+  let cached: WidgetBootstrapDocumentV1 | null = null;
+  try {
+    cached = readCachedBootstrap(cacheKey, nowMs);
+  } catch {
+    /* sessionStorage unavailable */
+  }
   if (cached) {
     return cached;
   }
 
   const keyHex = await sha256HexUtf8(clientKey);
-  const url = widgetBootstrapCdnUrl(cdnBase, keyHex);
   const fetchImpl = options.fetchImpl ?? fetch;
-  let response: Response;
+
+  // LEGACY(widget-by-key): remove once all deployments serve key-map pointers.
+  const fetchLegacy = async (): Promise<WidgetBootstrapDocumentV1> => {
+    const url = widgetBootstrapCdnUrl(cdnBase, keyHex);
+    return readBootstrapDocument(await getCdn(fetchImpl, url), url);
+  };
+
+  let publicId = readStoredPointer(keyHex);
+  if (!publicId) {
+    const pointerUrl = widgetKeyMapUrl(cdnBase, keyHex);
+    const pointerResponse = await getCdn(fetchImpl, pointerUrl);
+    if (pointerResponse.ok) {
+      publicId = parsePointerBody(await pointerResponse.text());
+    } else if (!isAbsentStatus(pointerResponse.status)) {
+      throw new WidgetBootstrapError(
+        `Bootstrap fetch failed (${pointerResponse.status}) from ${pointerUrl}`,
+      );
+    }
+    if (publicId) {
+      writeStoredPointer(keyHex, publicId);
+    }
+  }
+
+  let document: WidgetBootstrapDocumentV1;
+  if (!publicId) {
+    // LEGACY(widget-by-key): remove once all deployments serve key-map pointers.
+    document = await fetchLegacy();
+  } else {
+    const url = widgetProjectBootstrapUrl(cdnBase, publicId);
+    const response = await getCdn(fetchImpl, url);
+    if (isAbsentStatus(response.status)) {
+      removeStoredPointer(keyHex);
+      // LEGACY(widget-by-key): remove once all deployments serve key-map pointers.
+      document = await fetchLegacy();
+    } else {
+      document = await readBootstrapDocument(response, url);
+    }
+  }
   try {
-    response = await fetchImpl(url, {
-      method: "GET",
-      credentials: "omit",
-      cache: "no-store",
-    });
+    writeCachedBootstrap(cacheKey, document, nowMs);
   } catch {
-    throw new WidgetBootstrapError(`Failed to fetch bootstrap from ${url}`);
+    /* sessionStorage unavailable or full */
   }
-  if (!response.ok) {
-    throw new WidgetBootstrapError(
-      `Bootstrap fetch failed (${response.status}) from ${url}`,
-    );
-  }
-  const text = await response.text();
-  const document = parseWidgetBootstrapJson(text);
-  writeCachedBootstrap(cacheKey, document, nowMs);
   return document;
 }

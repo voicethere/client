@@ -10,6 +10,7 @@ import {
 import type { AudioInputState } from "../browser/microphone.js";
 import {
   bootstrapIdentityFromDocument,
+  clearWidgetKeyPointer,
   fetchWidgetBootstrapByClientKey,
   WidgetBootstrapError,
   type WidgetBootstrapIdentity,
@@ -71,6 +72,8 @@ export {
   DEFAULT_WIDGET_CDN_BASE,
   resolveWidgetCdnBase,
   widgetBootstrapCdnUrl,
+  widgetKeyMapUrl,
+  widgetProjectBootstrapUrl,
 } from "./hosts.js";
 export {
   sha256HexUtf8,
@@ -814,6 +817,10 @@ function buildVoiceThereWidget(
       });
 
       if (!started.ok) {
+        if (started.httpStatus === 401 || started.httpStatus === 403) {
+          // The key was rejected; drop its cached project pointer.
+          void clearWidgetKeyPointer(runtime.clientKey).catch(() => undefined);
+        }
         setStatusDisplay(started.message);
         return;
       }
