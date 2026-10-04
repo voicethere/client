@@ -6,6 +6,8 @@ import {
   resolveWidgetCdnBase,
   STAGING_WIDGET_CDN_BASE,
   widgetBootstrapCdnUrl,
+  widgetKeyMapUrl,
+  widgetProjectBootstrapUrl,
 } from "./hosts.js";
 import { WIDGET_KEY_HASH_FIXTURE_HEX } from "./widget-key-hash.js";
 
@@ -42,5 +44,27 @@ describe("embed hosts", () => {
     ).toBe(
       `https://cdn.voicethere.io/widgets/by-key/${WIDGET_KEY_HASH_FIXTURE_HEX}/bootstrap.json`,
     );
+  });
+
+  it("builds key-map pointer and project bootstrap URLs", () => {
+    expect(
+      widgetKeyMapUrl(
+        "https://cdn.voicethere.io/",
+        WIDGET_KEY_HASH_FIXTURE_HEX,
+      ),
+    ).toBe(
+      `https://cdn.voicethere.io/widgets/key-map/${WIDGET_KEY_HASH_FIXTURE_HEX}.json`,
+    );
+    expect(
+      widgetProjectBootstrapUrl("https://cdn.voicethere.io", "w_Abc-123"),
+    ).toBe("https://cdn.voicethere.io/widgets/w_Abc-123/bootstrap.json");
+  });
+
+  it("rejects unsafe public ids", () => {
+    for (const bad of ["", "../x", "a/b", "a b", "a?b", "x".repeat(129)]) {
+      expect(() =>
+        widgetProjectBootstrapUrl("https://cdn.voicethere.io", bad),
+      ).toThrow(/public_id/);
+    }
   });
 });

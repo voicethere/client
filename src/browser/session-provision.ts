@@ -93,6 +93,8 @@ export type StartSessionResult =
       ok: false;
       code: SessionFailureCode | "TIMEOUT" | "HTTP_ERROR";
       message: string;
+      /** HTTP status of the POST /sessions response when it was rejected. */
+      httpStatus?: number;
     };
 
 export function isTerminalSessionJobStatus(status: SessionJobStatus): boolean {
@@ -246,6 +248,7 @@ export async function startSession(
       ok: false,
       code: "HTTP_ERROR",
       message,
+      httpStatus: res.status,
     };
   }
 
