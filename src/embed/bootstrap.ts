@@ -263,6 +263,11 @@ async function readBootstrapDocument(
   return parseWidgetBootstrapJson(await response.text());
 }
 
+/** The CDN may answer a missing object with 403 as well as 404. */
+function isAbsentStatus(status: number): boolean {
+  return status === 403 || status === 404;
+}
+
 /** Returns a valid `public_id`, or null when the pointer body is not v1. */
 function parsePointerBody(text: string): string | null {
   try {
@@ -314,7 +319,7 @@ export async function fetchWidgetBootstrapByClientKey(
     const pointerResponse = await getCdn(fetchImpl, pointerUrl);
     if (pointerResponse.ok) {
       publicId = parsePointerBody(await pointerResponse.text());
-    } else if (pointerResponse.status !== 404) {
+    } else if (!isAbsentStatus(pointerResponse.status)) {
       throw new WidgetBootstrapError(
         `Bootstrap fetch failed (${pointerResponse.status}) from ${pointerUrl}`,
       );
@@ -331,7 +336,7 @@ export async function fetchWidgetBootstrapByClientKey(
   } else {
     const url = widgetProjectBootstrapUrl(cdnBase, publicId);
     const response = await getCdn(fetchImpl, url);
-    if (response.status === 404) {
+    if (isAbsentStatus(response.status)) {
       removeStoredPointer(keyHex);
       // LEGACY(widget-by-key): remove once all deployments serve key-map pointers.
       document = await fetchLegacy();

@@ -918,6 +918,37 @@ describe("createVoiceThereWidgetAsync", () => {
       expect(localStorageData.has(pointerKey)).toBe(false);
     });
 
+    it("falls back to legacy when the pointer answers 403", async () => {
+      routeCdn({
+        [keyMapUrl]: { status: 403 },
+        [legacyUrl]: { body: publishedBootstrap },
+      });
+
+      await createVoiceThereWidgetAsync({
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        mount: mount as unknown as HTMLElement,
+      });
+
+      expect(fetchedUrls()).toEqual([keyMapUrl, legacyUrl]);
+      expect(localStorageData.has(pointerKey)).toBe(false);
+    });
+
+    it("clears the pointer and uses legacy when the project bootstrap is 403", async () => {
+      localStorageData.set(pointerKey, "w_test");
+      routeCdn({
+        [projectUrl]: { status: 403 },
+        [legacyUrl]: { body: publishedBootstrap },
+      });
+
+      await createVoiceThereWidgetAsync({
+        clientKey: WIDGET_KEY_HASH_FIXTURE_RAW,
+        mount: mount as unknown as HTMLElement,
+      });
+
+      expect(fetchedUrls()).toEqual([projectUrl, legacyUrl]);
+      expect(localStorageData.has(pointerKey)).toBe(false);
+    });
+
     it("uses defaults when pointer and legacy are both 404", async () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       routeCdn({});
