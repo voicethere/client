@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-08
+
+### Changed
+
+- Default `reconnectBudgetMs` is 20 s (was 45 s), matching how long the platform keeps a dropped session.
+
 ## [0.11.0] - 2026-10-08
 
 ### Changed

@@ -317,12 +317,12 @@ describe("connectBrowserVoiceSession time-budgeted recovery", () => {
     expect(MockWebSocket.instances.length).toBe(before);
   });
 
-  it("gives up after the 45 s budget with WEBRTC_RECONNECT_EXHAUSTED and a lost status", async () => {
+  it("gives up after the 20 s budget with WEBRTC_RECONNECT_EXHAUSTED and a lost status", async () => {
     vi.useFakeTimers();
     const { session, errors } = await connectReady();
     MockWebSocket.mode = "error";
     MockPeerConnection.instances[0]!.fail();
-    await vi.advanceTimersByTimeAsync(44_000);
+    await vi.advanceTimersByTimeAsync(19_000);
     expect(errors.some((e) => e.code === "WEBRTC_RECONNECT_EXHAUSTED")).toBe(
       false,
     );

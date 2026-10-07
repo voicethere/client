@@ -122,8 +122,12 @@ function redactSignalingUrlForLog(url: string): string {
   }
 }
 
-/** Default total time from the first transport loss during which the client keeps trying. */
-export const DEFAULT_RECONNECT_BUDGET_MS = 45_000;
+/**
+ * Default total time from the first transport loss during which the client keeps trying.
+ * The platform keeps a dropped session for about 15 s, so retrying longer than 20 s
+ * only ends in a 401 and `SESSION_ENDED_DURING_RECONNECT`.
+ */
+export const DEFAULT_RECONNECT_BUDGET_MS = 20_000;
 /** ICE `disconnected` must last this long before recovery starts. */
 const ICE_DISCONNECTED_GRACE_MS = 2_000;
 /** Time the relay ICE recovery rejoin gets to reach readiness before escalating. */
@@ -225,7 +229,7 @@ export type BrowserVoiceSessionOptions = {
    */
   reconnectPolicy?: ReconnectPolicy;
   /**
-   * Total time (default 45000 ms) from the first transport loss after the session
+   * Total time (default 20000 ms; the platform keeps a dropped session for about 15 s) from the first transport loss after the session
    * was ready during which the client keeps trying to restore it. Recovery starts
    * within 3 s of the loss; when the budget is spent the session fails with
    * `WEBRTC_RECONNECT_EXHAUSTED` and a `lost` {@link WebRtcConnectionStatus.recovery}.

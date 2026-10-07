@@ -97,7 +97,7 @@ Pass `reconnectPolicy: "new-session"` to disable automatic same-session retry.
 
 ## Connection drops and reconnect
 
-A short network outage must not end the conversation. After the session was ready once, the client watches the transport and keeps trying to restore it for `reconnectBudgetMs` (default `45000`) counted from the first loss.
+A short network outage must not end the conversation. After the session was ready once, the client watches the transport and keeps trying to restore it for `reconnectBudgetMs` (default `20000`, because the platform keeps a dropped session for about 15 s) counted from the first loss.
 
 - **Detection.** ICE `disconnected` lasting more than 2 s, ICE/peer `failed`, or the signaling WebSocket closing unexpectedly. Recovery starts at most 3 s after the loss.
 - **Recovery.** The client closes the old signaling socket itself, opens a new one with the latest `session_reconnect_token` (or the join token if none arrived yet) and rejoins the same session. Each socket gets 5 s to open. Failed attempts retry after 1 s, 2 s, 4 s, then every 5 s until the budget is spent.
