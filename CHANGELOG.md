@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-08
+
 ### Changed
 
 - **Reconnect for 45 s after a network drop** — a session that was ready now keeps trying to recover for `reconnectBudgetMs` (default 45000) instead of stopping after a fixed number of attempts. Recovery starts within 3 s of ICE `disconnected` (2 s), `failed` or an unexpected signaling close, uses 1/2/4/5 s backoff and gives each reconnect socket 5 s to open. `maxAutoReconnectAttempts` is still accepted as an extra cap.
