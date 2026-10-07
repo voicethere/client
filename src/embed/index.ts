@@ -549,10 +549,14 @@ function buildVoiceThereWidget(
     document.head.append(style);
   }
 
-  const setStatusDisplay = (text: string, loading = false) => {
+  const setStatusDisplay = (text: string, loading = false, isError = false) => {
     statusText.textContent = text;
     statusSpinner.style.display = loading ? "inline-block" : "none";
+    // Same amber as the mic / playback warnings.
+    statusText.style.color = isError ? "#fcd34d" : "";
   };
+  let lastRecoveryState: string | undefined;
+  let restoredNoticeUntilMs = 0;
 
   const inboundAudio = document.createElement("audio");
   inboundAudio.autoplay = true;
@@ -799,6 +803,7 @@ function buildVoiceThereWidget(
         return;
       }
 
+      lastRecoveryState = undefined;
       setStatusDisplay("Connecting…", true);
       const started = await startSession({
         apiBase: runtime.apiBase,
@@ -841,9 +846,45 @@ function buildVoiceThereWidget(
           }
         },
         onConnectionStatus: (connectionStatus) => {
+          const recovery = connectionStatus.recovery;
+          const previousState = lastRecoveryState;
+          lastRecoveryState = recovery?.state;
+          if (recovery?.state === "interrupted") {
+            setStatusDisplay(recovery.message, true);
+            return;
+          }
+          if (recovery?.state === "lost") {
+            if (previousState === "lost") return;
+            setStatusDisplay(recovery.message, false, true);
+            const lostSession = session;
+            session = null;
+            lostSession?.disconnect();
+            spokenCaption?.dispose();
+            hideSessionNotices();
+            connectBtn.textContent = "Connect";
+            connectBtn.title = "";
+            return;
+          }
+          if (recovery?.state === "restored") {
+            if (previousState !== "restored") {
+              restoredNoticeUntilMs = Date.now() + 3000;
+              setTimeout(() => {
+                if (session && lastRecoveryState === "restored") {
+                  setStatusDisplay(
+                    formatWebRtcStatus(session.getConnectionStatus()),
+                  );
+                }
+              }, 3000);
+            }
+            if (Date.now() < restoredNoticeUntilMs) {
+              setStatusDisplay(recovery.message);
+              return;
+            }
+          }
           setStatusDisplay(formatWebRtcStatus(connectionStatus));
         },
         onReconnecting: (attempt) => {
+          if (lastRecoveryState === "interrupted") return;
           setStatusDisplay(`Reconnecting (${attempt})…`, true);
         },
         onAudioPlayback: (playbackState) => {

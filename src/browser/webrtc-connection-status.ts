@@ -13,6 +13,39 @@ export type WebRtcConnectionPhase =
   | "failed"
   | "closed";
 
+/** Default message shown while the transport is down and the client retries. */
+export const CONNECTION_INTERRUPTED_MESSAGE = "Connection lost. Reconnecting…";
+/** Default message shown once the transport is back. */
+export const CONNECTION_RESTORED_MESSAGE = "Reconnected.";
+/** Default message shown when the reconnect budget is spent. */
+export const CONNECTION_LOST_MESSAGE =
+  "The connection could not be restored. Please start a new conversation.";
+/** Default message shown when the server reports the session is gone during a reconnect. */
+export const CONNECTION_SESSION_ENDED_MESSAGE =
+  "The conversation ended while the connection was down. Please start a new one.";
+
+/** Latest transport-recovery event; carried on {@link WebRtcConnectionStatus.recovery}. */
+export type ConnectionRecoveryStatus =
+  | {
+      state: "interrupted";
+      /** Milliseconds since the transport was first lost. */
+      sinceMs: number;
+      message: string;
+    }
+  | {
+      state: "restored";
+      /** Total time the transport was down. */
+      downtimeMs: number;
+      via: "ice-restart" | "reconnect";
+      message: string;
+    }
+  | {
+      state: "lost";
+      /** Session error code, e.g. `WEBRTC_RECONNECT_EXHAUSTED` or `SESSION_ENDED_DURING_RECONNECT`. */
+      reason: string;
+      message: string;
+    };
+
 export type WebRtcConnectionSnapshot = {
   signalingJoined: boolean;
   peerConnectionState: RTCPeerConnectionState | "new";
@@ -22,6 +55,8 @@ export type WebRtcConnectionSnapshot = {
   outboundAudioTrack: boolean;
   controlChannelOpen: boolean;
   syncChannelOpen: boolean;
+  /** Set once a transport outage starts after the session was ready. */
+  recovery?: ConnectionRecoveryStatus;
 };
 
 export type WebRtcConnectionStatus = WebRtcConnectionSnapshot & {

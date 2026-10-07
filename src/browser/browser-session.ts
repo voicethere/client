@@ -30,6 +30,7 @@ export type ConnectBrowserSessionOptions = {
   onAgentAudioTrack?: BrowserVoiceSessionOptions["onAgentAudioTrack"];
   reconnectPolicy?: import("./browser-voice-session.js").ReconnectPolicy;
   maxAutoReconnectAttempts?: number;
+  reconnectBudgetMs?: number;
   maxIceRecoveryAttempts?: number;
   onIceRecovery?: import("./browser-voice-session.js").BrowserVoiceSessionOptions["onIceRecovery"];
   onReconnecting?: import("./browser-voice-session.js").BrowserVoiceSessionOptions["onReconnecting"];
@@ -91,6 +92,7 @@ export async function connectBrowserSession(
     onAgentAudioTrack: options.onAgentAudioTrack,
     reconnectPolicy: options.reconnectPolicy,
     maxAutoReconnectAttempts: options.maxAutoReconnectAttempts,
+    reconnectBudgetMs: options.reconnectBudgetMs,
     maxIceRecoveryAttempts: options.maxIceRecoveryAttempts,
     onIceRecovery: options.onIceRecovery,
     onReconnecting: options.onReconnecting,
@@ -117,6 +119,7 @@ export type {
 } from "./browser-voice-session.js";
 export { connectBrowserChatSession } from "./browser-chat-session.js";
 export {
+  CLIENT_HANGUP_MESSAGE_TYPE,
   connectBrowserVoiceSession,
   VOICE_SYNC_CHANNEL_LABEL,
   VOICE_CONTROL_CHANNEL_LABEL,
@@ -174,12 +177,17 @@ export {
   type ProvisionedRunnerMode,
 } from "./session-modes.js";
 export type {
+  ConnectionRecoveryStatus,
   WebRtcConnectionPhase,
   WebRtcConnectionSnapshot,
   WebRtcConnectionStatus,
   WebRtcReadinessProfile,
 } from "./webrtc-connection-status.js";
 export {
+  CONNECTION_INTERRUPTED_MESSAGE,
+  CONNECTION_LOST_MESSAGE,
+  CONNECTION_RESTORED_MESSAGE,
+  CONNECTION_SESSION_ENDED_MESSAGE,
   buildWebRtcConnectionStatus,
   deriveWebRtcConnectionPhase,
   isWebRtcConnectionReady,

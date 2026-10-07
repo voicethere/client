@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Reconnect for 45 s after a network drop** — a session that was ready now keeps trying to recover for `reconnectBudgetMs` (default 45000) instead of stopping after a fixed number of attempts. Recovery starts within 3 s of ICE `disconnected` (2 s), `failed` or an unexpected signaling close, uses 1/2/4/5 s backoff and gives each reconnect socket 5 s to open. `maxAutoReconnectAttempts` is still accepted as an extra cap.
+- **Better signaling logs** — each WebSocket failure logs `attempt`, `elapsed`, `phase`, close `code`/`reason`, `httpStatus` and `wasClean` with the token redacted. The Node WebSocket adapter now exposes the upgrade `httpStatus` and close details.
+
+### Added
+
+- `status.recovery` on `onConnectionStatus` (`interrupted` / `restored` / `lost`) with exported default messages and a `connectionStatusMessages` override; the embed widget shows them and re-enables Connect when the connection is lost.
+- Session error code `SESSION_ENDED_DURING_RECONNECT` when the gateway rejects the reconnect token with HTTP 401.
+- `disconnect()` / `disconnectAsync()` send `{ "type": "client_hangup" }` (`CLIENT_HANGUP_MESSAGE_TYPE`) on the control channel before closing.
+
 ## 0.10.0 — 2026-10-04
 
 ### Changed

@@ -1,0 +1,493 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { WebSocketServer } from "ws";
+
+import type { SessionErrorEvent } from "../session-errors.js";
+import { NodeWebSocketAdapter } from "../node/node-websocket.js";
+import type { WebRtcConnectionStatus } from "./webrtc-connection-status.js";
+import {
+  CLIENT_HANGUP_MESSAGE_TYPE,
+  connectBrowserVoiceSession,
+  VOICE_AGENT_SERVER_PEER_ID,
+  VOICE_CONTROL_CHANNEL_LABEL,
+  VOICE_SYNC_CHANNEL_LABEL,
+  type VoiceSessionReconnectInfo,
+} from "./browser-voice-session.js";
+import type { WebRtcRuntime } from "./webrtc-runtime.js";
+
+class MockWebSocket {
+  static OPEN = 1;
+  static instances: MockWebSocket[] = [];
+
+  readonly url: string;
+  readyState = MockWebSocket.OPEN;
+  onopen: ((event: unknown) => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onerror: ((event: unknown) => void) | null = null;
+  onclose: ((event: unknown) => void) | null = null;
+  sent: string[] = [];
+
+  /** `error` makes new sockets fail before open (like an unreachable gateway). */
+  static mode: "open" | "error" = "open";
+
+  constructor(url: string) {
+    this.url = url;
+    MockWebSocket.instances.push(this);
+    if (MockWebSocket.mode === "error") {
+      queueMicrotask(() => {
+        this.onerror?.({});
+        this.onclose?.({ code: 1006, reason: "", wasClean: false });
+      });
+      return;
+    }
+    queueMicrotask(() => this.onopen?.({}));
+  }
+
+  send(data: string): void {
+    this.sent.push(data);
+  }
+
+  close(): void {
+    this.readyState = 3;
+    this.onclose?.({});
+  }
+}
+
+class MockDataChannel {
+  readonly label: string;
+  readyState: RTCDataChannelState = "connecting";
+  binaryType: BinaryType = "arraybuffer";
+  onopen: ((event: unknown) => void) | null = null;
+  onclose: ((event: unknown) => void) | null = null;
+  onmessage: ((event: { data: unknown }) => void) | null = null;
+
+  constructor(label: string) {
+    this.label = label;
+  }
+
+  open(): void {
+    this.readyState = "open";
+    this.onopen?.({});
+  }
+
+  sent: string[] = [];
+  bufferedAmount = 0;
+  send(data: unknown): void {
+    this.sent.push(String(data));
+  }
+  close(): void {
+    this.readyState = "closed";
+  }
+}
+
+type MockPeerOptions = {
+  failOnConnect?: boolean;
+};
+
+class MockPeerConnection {
+  static instances: MockPeerConnection[] = [];
+  static nextOptions: MockPeerOptions = {};
+
+  readonly config: RTCConfiguration | undefined;
+  localDescription: RTCSessionDescriptionInit | null = null;
+  remoteDescription: RTCSessionDescriptionInit | null = null;
+  connectionState: RTCPeerConnectionState = "new";
+  iceConnectionState: RTCIceConnectionState = "new";
+  iceGatheringState: RTCIceGatheringState = "new";
+  ontrack: ((event: RTCTrackEvent) => void) | null = null;
+  ondatachannel: ((event: RTCDataChannelEvent) => void) | null = null;
+  onicecandidate: ((event: RTCPeerConnectionIceEvent) => void) | null = null;
+  onconnectionstatechange: (() => void) | null = null;
+  oniceconnectionstatechange: (() => void) | null = null;
+  onicegatheringstatechange: (() => void) | null = null;
+
+  readonly options: MockPeerOptions;
+
+  constructor(config?: RTCConfiguration) {
+    this.config = config;
+    this.options = { ...MockPeerConnection.nextOptions };
+    MockPeerConnection.instances.push(this);
+  }
+
+  addTrack(): RTCRtpSender {
+    return {} as RTCRtpSender;
+  }
+
+  async setRemoteDescription(
+    description: RTCSessionDescriptionInit,
+  ): Promise<void> {
+    this.remoteDescription = description;
+  }
+
+  async addIceCandidate(_candidate: RTCIceCandidateInit): Promise<void> {}
+
+  async createAnswer(): Promise<RTCSessionDescriptionInit> {
+    return { type: "answer", sdp: "v=0\r\na=ice-ufrag:local\r\n" };
+  }
+
+  async setLocalDescription(
+    description: RTCSessionDescriptionInit,
+  ): Promise<void> {
+    this.localDescription = description;
+    this.iceGatheringState = "complete";
+    this.onicegatheringstatechange?.();
+  }
+
+  connect(): void {
+    if (this.options.failOnConnect) {
+      this.connectionState = "failed";
+      this.onconnectionstatechange?.();
+      return;
+    }
+    this.connectionState = "connected";
+    this.onconnectionstatechange?.();
+  }
+
+  fail(): void {
+    this.connectionState = "failed";
+    this.onconnectionstatechange?.();
+  }
+
+  close(): void {
+    this.connectionState = "closed";
+  }
+}
+
+function sendOffer(ws: MockWebSocket): void {
+  ws.onmessage?.({
+    data: JSON.stringify({
+      type: "offer",
+      peerId: VOICE_AGENT_SERVER_PEER_ID,
+      sdp: {
+        type: "offer",
+        sdp: "v=0\r\na=ice-ufrag:server\r\na=ice-pwd:secret\r\n",
+      },
+    }),
+  });
+}
+
+const openedControlChannels: MockDataChannel[] = [];
+
+function openDataChannels(pc: MockPeerConnection): MockDataChannel {
+  const control = new MockDataChannel(VOICE_CONTROL_CHANNEL_LABEL);
+  const sync = new MockDataChannel(VOICE_SYNC_CHANNEL_LABEL);
+  pc.ondatachannel?.({ channel: control } as RTCDataChannelEvent);
+  pc.ondatachannel?.({ channel: sync } as RTCDataChannelEvent);
+  pc.connect();
+  control.open();
+  sync.open();
+  openedControlChannels.push(control);
+  return control;
+}
+
+const credentials = {
+  session_id: "session-1",
+  mode: "data" as const,
+  room_id: "room-1",
+  join_token: "join",
+  signaling_url: "ws://127.0.0.1:8080/ws",
+  ice_servers: [],
+  expires_at: new Date(Date.now() + 60_000).toISOString(),
+};
+
+const runtime = (): WebRtcRuntime => ({
+  WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
+  RTCPeerConnection:
+    MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+});
+
+function setIce(pc: MockPeerConnection, state: RTCIceConnectionState): void {
+  pc.iceConnectionState = state;
+  pc.oniceconnectionstatechange?.();
+}
+
+async function flush(): Promise<void> {
+  for (let i = 0; i < 6; i += 1) await Promise.resolve();
+}
+
+async function connectReady(
+  extra: Partial<Parameters<typeof connectBrowserVoiceSession>[0]> = {},
+) {
+  const statuses: WebRtcConnectionStatus[] = [];
+  const errors: SessionErrorEvent[] = [];
+  const debugLines: string[] = [];
+  const session = await connectBrowserVoiceSession({
+    credentials,
+    requestMic: false,
+    readiness: "data",
+    runtime: runtime(),
+    onConnectionStatus: (status) => statuses.push(status),
+    onSessionError: (event) => errors.push(event),
+    onDebugEvent: {
+      info: (s: string, n: string, d?: string) =>
+        debugLines.push(`${s}/${n} ${d ?? ""}`),
+      warn: (s: string, n: string, d?: string) =>
+        debugLines.push(`${s}/${n} ${d ?? ""}`),
+      error: (s: string, n: string, d?: string) =>
+        debugLines.push(`${s}/${n} ${d ?? ""}`),
+      debug: () => undefined,
+    } as never,
+    ...extra,
+  });
+  sendOffer(MockWebSocket.instances[0]!);
+  await flush();
+  openDataChannels(MockPeerConnection.instances[0]!);
+  await session.waitForConnected(1_000);
+  return { session, statuses, errors, debugLines };
+}
+
+/** Deliver a server offer on the newest socket and bring the new PC to ready. */
+async function completeReconnect(): Promise<void> {
+  sendOffer(MockWebSocket.instances.at(-1)!);
+  await flush();
+  openDataChannels(MockPeerConnection.instances.at(-1)!);
+  await flush();
+}
+
+describe("connectBrowserVoiceSession time-budgeted recovery", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    MockWebSocket.instances = [];
+    MockWebSocket.mode = "open";
+    MockPeerConnection.instances = [];
+    MockPeerConnection.nextOptions = {};
+    openedControlChannels.length = 0;
+  });
+
+  it("a 5 s transport outage restores the session without a new session", async () => {
+    vi.useFakeTimers();
+    const { session, statuses, errors } = await connectReady();
+
+    setIce(MockPeerConnection.instances[0]!, "disconnected");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await completeReconnect();
+
+    const states = statuses.flatMap((s) =>
+      s.recovery ? [s.recovery.state] : [],
+    );
+    expect(states).toContain("interrupted");
+    const last = session.getConnectionStatus().recovery;
+    expect(last?.state).toBe("restored");
+    if (last?.state === "restored") {
+      expect(last.downtimeMs).toBeGreaterThanOrEqual(5_000);
+      expect(last.downtimeMs).toBeLessThan(5_200);
+      expect(last.message).toBe("Reconnected.");
+    }
+    expect(errors.some((e) => e.code === "WEBRTC_RECONNECT_EXHAUSTED")).toBe(
+      false,
+    );
+    expect(session.getConnectionStatus().ready).toBe(true);
+    // Same session credentials: the reconnect socket uses the same URL.
+    expect(MockWebSocket.instances.at(-1)!.url).toBe(
+      MockWebSocket.instances[0]!.url,
+    );
+  });
+
+  it("recovery starts within 3 s of ICE failure", async () => {
+    vi.useFakeTimers();
+    await connectReady();
+    const before = MockWebSocket.instances.length;
+    MockPeerConnection.instances[0]!.fail();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(MockWebSocket.instances.length).toBeGreaterThan(before);
+  });
+
+  it("recovery starts within 3 s of ICE disconnected lasting 2 s", async () => {
+    vi.useFakeTimers();
+    await connectReady();
+    const before = MockWebSocket.instances.length;
+    setIce(MockPeerConnection.instances[0]!, "disconnected");
+    await vi.advanceTimersByTimeAsync(1_900);
+    expect(MockWebSocket.instances.length).toBe(before);
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(MockWebSocket.instances.length).toBeGreaterThan(before);
+  });
+
+  it("ICE disconnected that heals within 2 s does not start recovery", async () => {
+    vi.useFakeTimers();
+    await connectReady();
+    const before = MockWebSocket.instances.length;
+    const pc = MockPeerConnection.instances[0]!;
+    setIce(pc, "disconnected");
+    await vi.advanceTimersByTimeAsync(1_500);
+    setIce(pc, "connected");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(MockWebSocket.instances.length).toBe(before);
+  });
+
+  it("gives up after the 45 s budget with WEBRTC_RECONNECT_EXHAUSTED and a lost status", async () => {
+    vi.useFakeTimers();
+    const { session, errors } = await connectReady();
+    MockWebSocket.mode = "error";
+    MockPeerConnection.instances[0]!.fail();
+    await vi.advanceTimersByTimeAsync(44_000);
+    expect(errors.some((e) => e.code === "WEBRTC_RECONNECT_EXHAUSTED")).toBe(
+      false,
+    );
+    expect(MockWebSocket.instances.length).toBeGreaterThan(4);
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(errors.some((e) => e.code === "WEBRTC_RECONNECT_EXHAUSTED")).toBe(
+      true,
+    );
+    const recovery = session.getConnectionStatus().recovery;
+    expect(recovery).toMatchObject({
+      state: "lost",
+      reason: "WEBRTC_RECONNECT_EXHAUSTED",
+      message:
+        "The connection could not be restored. Please start a new conversation.",
+    });
+    const wsCount = MockWebSocket.instances.length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(MockWebSocket.instances.length).toBe(wsCount);
+  });
+
+  it("ws failure log line contains code, reason, httpStatus and attempt", async () => {
+    vi.useFakeTimers();
+    const { debugLines } = await connectReady({
+      credentials: { ...credentials, signaling_url: "ws://h/ws?token=secret" },
+    });
+    MockWebSocket.mode = "error";
+    MockPeerConnection.instances[0]!.fail();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const line = debugLines.find((l) => l.includes("signaling ws failed"));
+    expect(line).toBeDefined();
+    expect(line).toMatch(/attempt=\d+/);
+    expect(line).toMatch(/elapsed=\d+/);
+    expect(line).toContain("phase=connect");
+    expect(line).toContain("code=1006");
+    expect(line).toMatch(/reason=/);
+    expect(line).toContain("httpStatus=n/a");
+    expect(line).toContain("wasClean=false");
+    expect(line).not.toContain("secret");
+  });
+
+  it("disconnect sends client_hangup on the control channel before closing", async () => {
+    const { session } = await connectReady();
+    const control = openedControlChannels[0]!;
+    session.disconnect();
+    expect(control.sent).toEqual([
+      JSON.stringify({ type: CLIENT_HANGUP_MESSAGE_TYPE }),
+    ]);
+    expect(CLIENT_HANGUP_MESSAGE_TYPE).toBe("client_hangup");
+  });
+
+  it("disconnectAsync sends client_hangup once", async () => {
+    const { session } = await connectReady();
+    const control = openedControlChannels[0]!;
+    await session.disconnectAsync();
+    expect(control.sent).toEqual([
+      JSON.stringify({ type: CLIENT_HANGUP_MESSAGE_TYPE }),
+    ]);
+  });
+
+  it("reconnect does not send client_hangup", async () => {
+    vi.useFakeTimers();
+    const { session } = await connectReady();
+    const control = openedControlChannels[0]!;
+    // Unintentional loss, automatic recovery, then a manual reconnect.
+    MockPeerConnection.instances[0]!.fail();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await completeReconnect();
+    await session.reconnect();
+    await flush();
+    expect(control.sent).toEqual([]);
+    for (const channel of openedControlChannels) {
+      expect(channel.sent).toEqual([]);
+    }
+  });
+});
+
+describe("reconnect token rejected by the gateway (Node ws)", () => {
+  it("a 401 on the reconnect token ends immediately with SESSION_ENDED_DURING_RECONNECT", async () => {
+    let upgrades = 0;
+    const server = createServer();
+    const wss = new WebSocketServer({ noServer: true });
+    const serverSockets: import("ws").WebSocket[] = [];
+    server.on("upgrade", (request, socket, head) => {
+      upgrades += 1;
+      if (upgrades > 1) {
+        socket.end("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
+        return;
+      }
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        serverSockets.push(ws);
+        wss.emit("connection", ws, request);
+      });
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const { port } = server.address() as AddressInfo;
+
+    const errors: SessionErrorEvent[] = [];
+    const debugLines: string[] = [];
+    try {
+      const session = await connectBrowserVoiceSession({
+        credentials: {
+          ...credentials,
+          signaling_url: `ws://127.0.0.1:${port}/ws`,
+        },
+        requestMic: false,
+        readiness: "data",
+        runtime: {
+          WebSocket:
+            NodeWebSocketAdapter as unknown as WebRtcRuntime["WebSocket"],
+          RTCPeerConnection:
+            MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+        },
+        onSessionError: (event) => errors.push(event),
+        onDebugEvent: {
+          info: () => undefined,
+          warn: (s: string, n: string, d?: string) =>
+            debugLines.push(`${s}/${n} ${d ?? ""}`),
+          error: (s: string, n: string, d?: string) =>
+            debugLines.push(`${s}/${n} ${d ?? ""}`),
+          debug: () => undefined,
+        } as never,
+      });
+      serverSockets[0]!.send(
+        JSON.stringify({
+          type: "offer",
+          peerId: VOICE_AGENT_SERVER_PEER_ID,
+          sdp: {
+            type: "offer",
+            sdp: "v=0\r\na=ice-ufrag:server\r\na=ice-pwd:secret\r\n",
+          },
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(MockPeerConnection.instances).toHaveLength(1),
+      );
+      await flush();
+      openDataChannels(MockPeerConnection.instances[0]!);
+      await session.waitForConnected(1_000);
+
+      const startedAt = Date.now();
+      serverSockets[0]!.terminate();
+      await vi.waitFor(
+        () =>
+          expect(
+            errors.some((e) => e.code === "SESSION_ENDED_DURING_RECONNECT"),
+          ).toBe(true),
+        { timeout: 2_000 },
+      );
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(errors.some((e) => e.code === "WEBRTC_RECONNECT_EXHAUSTED")).toBe(
+        false,
+      );
+      expect(session.getConnectionStatus().recovery).toMatchObject({
+        state: "lost",
+        reason: "SESSION_ENDED_DURING_RECONNECT",
+        message:
+          "The conversation ended while the connection was down. Please start a new one.",
+      });
+      expect(debugLines.some((l) => l.includes("httpStatus=401"))).toBe(true);
+      session.disconnect();
+    } finally {
+      for (const ws of serverSockets) ws.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
