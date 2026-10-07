@@ -17,7 +17,11 @@ export class NodeWebSocketAdapter {
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose:
+    | ((event: { code: number; reason: string; wasClean: boolean }) => void)
+    | null = null;
+  /** HTTP status of a rejected upgrade (e.g. 401), read from `unexpected-response`. */
+  httpStatus?: number;
 
   private readonly ws: NodeWebSocket;
   private readonly url: string;
@@ -30,6 +34,12 @@ export class NodeWebSocketAdapter {
     this.ws.on("open", () => {
       this.readyState = NodeWebSocket.OPEN;
       this.onopen?.();
+    });
+    this.ws.on("unexpected-response", (_request, response) => {
+      this.httpStatus = response.statusCode;
+      response.resume();
+      // With a listener attached `ws` leaves the request open; abort it here.
+      this.ws.terminate();
     });
     this.ws.on("error", (error) => {
       const message = error instanceof Error ? error.message : String(error);
@@ -56,9 +66,13 @@ export class NodeWebSocketAdapter {
             : Buffer.from(data as ArrayBuffer).toString("utf8");
       this.onmessage?.({ data: text } as MessageEvent);
     });
-    this.ws.on("close", () => {
+    this.ws.on("close", (code, reason) => {
       this.readyState = NodeWebSocket.CLOSED;
-      this.onclose?.();
+      this.onclose?.({
+        code,
+        reason: reason.toString("utf8"),
+        wasClean: code === 1000,
+      });
     });
   }
 

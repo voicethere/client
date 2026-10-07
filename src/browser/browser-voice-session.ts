@@ -16,6 +16,10 @@ import type { SessionCredentials } from "./session-provision.js";
 import type { DebugConsole } from "./debug-console.js";
 import {
   buildWebRtcConnectionStatus,
+  CONNECTION_INTERRUPTED_MESSAGE,
+  CONNECTION_LOST_MESSAGE,
+  CONNECTION_RESTORED_MESSAGE,
+  CONNECTION_SESSION_ENDED_MESSAGE,
   isHalfOpenConnection,
   formatWebRtcConnectTimeoutMessage,
   isWebRtcConnectionReady,
@@ -118,6 +122,35 @@ function redactSignalingUrlForLog(url: string): string {
   }
 }
 
+/** Default total time from the first transport loss during which the client keeps trying. */
+export const DEFAULT_RECONNECT_BUDGET_MS = 45_000;
+/** ICE `disconnected` must last this long before recovery starts. */
+const ICE_DISCONNECTED_GRACE_MS = 2_000;
+/** Time the relay ICE recovery rejoin gets to reach readiness before escalating. */
+const ICE_RECOVERY_SETTLE_MS = 5_000;
+/** Time a same-session reconnect gets to reach readiness before the next attempt. */
+const RECONNECT_SETTLE_MS = 10_000;
+/** Reconnect signaling WebSocket must open within this time. */
+const SIGNALING_CONNECT_TIMEOUT_MS = 5_000;
+/** Delay before same-session reconnect attempt 1, 2, 3, then every later attempt. */
+const RECONNECT_BACKOFF_MS = [1_000, 2_000, 4_000, 5_000] as const;
+
+/** The gateway rejected the reconnect token (HTTP 401): the session no longer exists. */
+class SessionEndedDuringReconnectError extends Error {
+  constructor() {
+    super("signaling rejected the reconnect token (HTTP 401)");
+    this.name = "SessionEndedDuringReconnectError";
+  }
+}
+
+/**
+ * Sent on the control channel when the integrator ends the session, so the runner
+ * closes immediately instead of holding a dropped peer through its network-drop grace.
+ */
+export const CLIENT_HANGUP_MESSAGE_TYPE = "client_hangup";
+/** Max wait for the hangup message to leave the send buffer during `disconnectAsync`. */
+const CLIENT_HANGUP_DRAIN_MS = 200;
+
 export const VOICE_AGENT_SERVER_PEER_ID = "voice-agent-server";
 export const VOICE_CONTROL_CHANNEL_LABEL = "voice-control";
 /** High-frequency binary sync channel (matches `@node-webrtc-rust/sdk/voice`). */
@@ -192,9 +225,28 @@ export type BrowserVoiceSessionOptions = {
    */
   reconnectPolicy?: ReconnectPolicy;
   /**
-   * Max automatic same-session retries after unintentional signaling/WebRTC loss
-   * (default 4). `waitForConnected()` keeps waiting through these ICE reconnect
-   * attempts until `timeoutMs` elapses. Set `0` to fail on the first transport error.
+   * Total time (default 45000 ms) from the first transport loss after the session
+   * was ready during which the client keeps trying to restore it. Recovery starts
+   * within 3 s of the loss; when the budget is spent the session fails with
+   * `WEBRTC_RECONNECT_EXHAUSTED` and a `lost` {@link WebRtcConnectionStatus.recovery}.
+   */
+  reconnectBudgetMs?: number;
+  /**
+   * Overrides the default human messages carried on
+   * {@link WebRtcConnectionStatus.recovery}.
+   */
+  connectionStatusMessages?: Partial<{
+    interrupted: string;
+    restored: string;
+    lost: string;
+    sessionEnded: string;
+  }>;
+  /**
+   * Optional cap on same-session reconnect attempts (kept for compatibility).
+   * When omitted, a session that was ready retries until {@link reconnectBudgetMs}
+   * is spent; before the first ready state the cap is 4. `waitForConnected()` keeps
+   * waiting through these attempts until `timeoutMs` elapses. Set `0` to fail on the
+   * first transport error.
    */
   maxAutoReconnectAttempts?: number;
   /**
@@ -328,9 +380,7 @@ async function attachMicTracks(
   let micSender: RTCRtpSender | null = null;
   for (const track of micStream.getAudioTracks()) {
     const result = pc.addTrack(track as MediaStreamTrack, micStream) as
-      | RTCRtpSender
-      | Promise<RTCRtpSender>
-      | void;
+      RTCRtpSender | Promise<RTCRtpSender> | void;
     let sender: RTCRtpSender | void = result as RTCRtpSender | void;
     if (
       result &&
@@ -508,7 +558,19 @@ export async function connectBrowserVoiceSession(
     }
   };
   const reconnectPolicy = options.reconnectPolicy ?? "same-session";
-  const maxAutoReconnectAttempts = options.maxAutoReconnectAttempts ?? 4;
+  const reconnectBudgetMs =
+    options.reconnectBudgetMs ?? DEFAULT_RECONNECT_BUDGET_MS;
+  const statusMessages = {
+    interrupted:
+      options.connectionStatusMessages?.interrupted ??
+      CONNECTION_INTERRUPTED_MESSAGE,
+    restored:
+      options.connectionStatusMessages?.restored ?? CONNECTION_RESTORED_MESSAGE,
+    lost: options.connectionStatusMessages?.lost ?? CONNECTION_LOST_MESSAGE,
+    sessionEnded:
+      options.connectionStatusMessages?.sessionEnded ??
+      CONNECTION_SESSION_ENDED_MESSAGE,
+  };
   const maxIceRecoveryAttempts = options.maxIceRecoveryAttempts ?? 1;
   const iceRecoveryStuckCheckingMs =
     options.iceRecoveryStuckCheckingMs ?? 12_000;
@@ -519,6 +581,18 @@ export async function connectBrowserVoiceSession(
   let iceStuckWatchTimer: ReturnType<typeof setInterval> | undefined;
   let iceCheckingSinceMs: number | null = null;
   let hasReachedReadyOnce = false;
+  /** Cap on same-session reconnect attempts: explicit option, else budget-driven once ready. */
+  const maxAutoReconnectAttemptsLimit = (): number =>
+    options.maxAutoReconnectAttempts ??
+    (hasReachedReadyOnce ? Number.POSITIVE_INFINITY : 4);
+  /** Wall-clock start of the current transport outage (null when healthy). */
+  let outageStartMs: number | null = null;
+  let outageRecoveryVia: "ice-restart" | "reconnect" = "ice-restart";
+  /** True once the live PC is gone or ICE itself was lost, so "ready" means recovered. */
+  let outageRestoreEligible = false;
+  let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+  let iceDisconnectedTimer: ReturnType<typeof setTimeout> | undefined;
+  let settleTimer: ReturnType<typeof setTimeout> | undefined;
   let awaitingReconnectedCallback = false;
   let lastReconnectAttemptForCallback = 0;
   let lastReconnectReason: string | undefined;
@@ -563,9 +637,9 @@ export async function connectBrowserVoiceSession(
     audioInputDeviceId = null;
   };
 
-  const applyMicAcquisition = (result: Awaited<
-    ReturnType<typeof acquireAudioInput>
-  >): void => {
+  const applyMicAcquisition = (
+    result: Awaited<ReturnType<typeof acquireAudioInput>>,
+  ): void => {
     disposeCurrentMic();
     micStream = result.stream;
     audioInputState = result.state;
@@ -592,9 +666,7 @@ export async function connectBrowserVoiceSession(
     );
   };
 
-  const replaceMicOnSender = async (
-    nextStream: MediaStream,
-  ): Promise<void> => {
+  const replaceMicOnSender = async (nextStream: MediaStream): Promise<void> => {
     const nextTrack = nextStream.getAudioTracks()[0] ?? null;
     if (micRtpSender) {
       await micRtpSender.replaceTrack(nextTrack);
@@ -652,6 +724,7 @@ export async function connectBrowserVoiceSession(
     patch: Partial<WebRtcConnectionSnapshot>,
   ): void => {
     Object.assign(connectionSnapshot, patch);
+    markRestoredIfRecovered();
     publishConnectionStatus();
     tryResolveConnected();
   };
@@ -735,27 +808,177 @@ export async function connectBrowserVoiceSession(
     options.onControlMessage?.(message);
   };
 
-  const emitAutoReconnectExhausted = (reason: string): void => {
+  const clearRecoveryTimers = (): void => {
+    if (budgetTimer) clearTimeout(budgetTimer);
+    if (iceDisconnectedTimer) clearTimeout(iceDisconnectedTimer);
+    if (settleTimer) clearTimeout(settleTimer);
+    budgetTimer = undefined;
+    iceDisconnectedTimer = undefined;
+    settleTimer = undefined;
+  };
+
+  /** Terminal recovery failure: stop retrying, tell the integrator, publish `lost`. */
+  const failRecovery = (input: {
+    code: "WEBRTC_RECONNECT_EXHAUSTED" | "SESSION_ENDED_DURING_RECONNECT";
+    errorMessage: string;
+    statusMessage: string;
+    logName: string;
+    logDetail: string;
+  }): void => {
     if (gracefulDisconnect) return;
     awaitingReconnectedCallback = false;
-    debug?.warn("session", "auto_reconnect_exhausted", reason);
+    debug?.warn("session", input.logName, input.logDetail);
     gracefulDisconnect = true;
+    clearRecoveryTimers();
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+    // Invalidate in-flight reconnect flights and their WebSocket handlers.
+    signalingEpoch += 1;
     notifySessionError(
       createLocalSessionError({
-        code: "WEBRTC_RECONNECT_EXHAUSTED",
-        message: `Auto-reconnect exhausted after ${maxAutoReconnectAttempts} attempts (${reason})`,
+        code: input.code,
+        message: input.errorMessage,
         sessionId: orchestratorSessionId,
         recoverable: false,
       }),
     );
+    rejectConnectedWait(new Error(input.errorMessage), false);
     updateConnectionSnapshot({
       signalingJoined: false,
       controlChannelOpen: false,
       syncChannelOpen: false,
+      recovery: {
+        state: "lost",
+        reason: input.code,
+        message: input.statusMessage,
+      },
       ...(connectionSnapshot.peerConnectionState !== "closed"
         ? { peerConnectionState: "closed" as const }
         : {}),
     });
+  };
+
+  const emitAutoReconnectExhausted = (reason: string): void => {
+    const elapsedMs =
+      outageStartMs !== null ? Date.now() - outageStartMs : undefined;
+    failRecovery({
+      code: "WEBRTC_RECONNECT_EXHAUSTED",
+      errorMessage: `Auto-reconnect exhausted after ${autoReconnectAttempts} attempts${
+        elapsedMs !== undefined ? ` in ${elapsedMs} ms` : ""
+      } (${reason})`,
+      statusMessage: statusMessages.lost,
+      logName: "auto_reconnect_exhausted",
+      logDetail: reason,
+    });
+  };
+
+  const endSessionDuringReconnect = (): void => {
+    failRecovery({
+      code: "SESSION_ENDED_DURING_RECONNECT",
+      errorMessage: statusMessages.sessionEnded,
+      statusMessage: statusMessages.sessionEnded,
+      logName: "session_ended_during_reconnect",
+      logDetail: "reconnect token rejected with HTTP 401",
+    });
+  };
+
+  /**
+   * Start tracking a transport outage (only after the session was ready once).
+   * The budget runs from the first loss, not from when recovery work begins.
+   */
+  const beginOutage = (
+    reason: string,
+    lossAtMs: number,
+    iceLost: boolean,
+  ): void => {
+    if (!hasReachedReadyOnce || gracefulDisconnect) return;
+    if (reconnectPolicy === "new-session") return;
+    if (outageStartMs !== null) return;
+    outageStartMs = lossAtMs;
+    outageRecoveryVia = "ice-restart";
+    outageRestoreEligible = iceLost;
+    const remainingMs = Math.max(
+      0,
+      reconnectBudgetMs - (Date.now() - lossAtMs),
+    );
+    budgetTimer = setTimeout(() => {
+      budgetTimer = undefined;
+      emitAutoReconnectExhausted("budget_exhausted");
+    }, remainingMs);
+    debug?.warn("session", "transport_lost", reason);
+    updateConnectionSnapshot({
+      recovery: {
+        state: "interrupted",
+        sinceMs: Date.now() - lossAtMs,
+        message: statusMessages.interrupted,
+      },
+    });
+  };
+
+  /** Called from {@link updateConnectionSnapshot}; assigns `recovery` without publishing. */
+  const markRestoredIfRecovered = (): void => {
+    if (outageStartMs === null || gracefulDisconnect) return;
+    if (!outageRestoreEligible) return;
+    if (!isWebRtcConnectionReady(connectionSnapshot, readinessProfile)) return;
+    const ice = connectionSnapshot.iceConnectionState;
+    if (ice === "disconnected" || ice === "failed" || ice === "closed") return;
+    const downtimeMs = Date.now() - outageStartMs;
+    outageStartMs = null;
+    outageRestoreEligible = false;
+    clearRecoveryTimers();
+    debug?.info(
+      "session",
+      "transport_restored",
+      `downtime_ms=${downtimeMs} via=${outageRecoveryVia}`,
+    );
+    connectionSnapshot.recovery = {
+      state: "restored",
+      downtimeMs,
+      via: outageRecoveryVia,
+      message: statusMessages.restored,
+    };
+  };
+
+  const clearIceDisconnectedTimer = (): void => {
+    if (iceDisconnectedTimer) clearTimeout(iceDisconnectedTimer);
+    iceDisconnectedTimer = undefined;
+  };
+
+  /** Escalate when a recovery rejoin does not reach readiness in time. */
+  const armSettleTimer = (ms: number, reason: string): void => {
+    if (outageStartMs === null || gracefulDisconnect) return;
+    if (settleTimer) clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      settleTimer = undefined;
+      if (outageStartMs === null || gracefulDisconnect) return;
+      debug?.warn("session", "recovery_settle_timeout", reason);
+      scheduleAutoReconnect(`${reason}_timeout`);
+    }, ms);
+  };
+
+  /** ICE/PC `disconnected`: start recovery if it lasts longer than the grace period. */
+  const noteIceDisconnected = (localPc: RTCPeerConnection): void => {
+    if (!hasReachedReadyOnce || gracefulDisconnect) return;
+    if (reconnectPolicy === "new-session") return;
+    if (iceDisconnectedTimer || outageStartMs !== null) return;
+    const lossAtMs = Date.now();
+    iceDisconnectedTimer = setTimeout(() => {
+      iceDisconnectedTimer = undefined;
+      if (pc !== localPc || gracefulDisconnect) return;
+      beginOutage("ice_disconnected", lossAtMs, true);
+      startRecovery("ice_disconnected");
+    }, ICE_DISCONNECTED_GRACE_MS);
+  };
+
+  const startRecovery = (reason: string): void => {
+    if (gracefulDisconnect || reconnectPolicy === "new-session") return;
+    if (canIceRecover()) {
+      scheduleIceRecovery(reason);
+    } else if (canAutoReconnectTransport()) {
+      scheduleAutoReconnect(reason);
+    } else {
+      emitAutoReconnectExhausted(reason);
+    }
   };
 
   const ensureConnectedPromise = (): Promise<void> => {
@@ -777,7 +1000,7 @@ export async function connectBrowserVoiceSession(
 
   const canAutoReconnectTransport = (): boolean => {
     if (gracefulDisconnect || reconnectPolicy === "new-session") return false;
-    return autoReconnectAttempts < maxAutoReconnectAttempts;
+    return autoReconnectAttempts < maxAutoReconnectAttemptsLimit();
   };
 
   const reconnectInfo = (reason?: string): VoiceSessionReconnectInfo => ({
@@ -820,16 +1043,22 @@ export async function connectBrowserVoiceSession(
     );
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
-      void reconnectSignaling().catch((error: unknown) => {
-        debug?.warn(
-          "session",
-          "ice_recovery_failed",
-          error instanceof Error ? error.message : String(error),
-        );
-        if (canAutoReconnectTransport()) {
-          scheduleAutoReconnect(reason);
-        }
-      });
+      void reconnectSignaling()
+        .then(() => armSettleTimer(ICE_RECOVERY_SETTLE_MS, "ice_recovery"))
+        .catch((error: unknown) => {
+          if (error instanceof SessionEndedDuringReconnectError) {
+            endSessionDuringReconnect();
+            return;
+          }
+          debug?.warn(
+            "session",
+            "ice_recovery_failed",
+            error instanceof Error ? error.message : String(error),
+          );
+          if (canAutoReconnectTransport()) {
+            scheduleAutoReconnect(reason);
+          }
+        });
     }, 0);
   };
 
@@ -926,6 +1155,8 @@ export async function connectBrowserVoiceSession(
   ): void => {
     stopMicPump?.();
     stopMicPump = null;
+    clearIceDisconnectedTimer();
+    beginOutage(reconnectReason, Date.now(), state === "failed");
     if (!gracefulDisconnect) {
       if (state === "failed") {
         notifySessionError({
@@ -957,8 +1188,8 @@ export async function connectBrowserVoiceSession(
       scheduleAutoReconnect(reconnectReason);
     } else if (
       !gracefulDisconnect &&
-      maxAutoReconnectAttempts > 0 &&
-      autoReconnectAttempts >= maxAutoReconnectAttempts
+      maxAutoReconnectAttemptsLimit() > 0 &&
+      autoReconnectAttempts >= maxAutoReconnectAttemptsLimit()
     ) {
       emitAutoReconnectExhausted(reconnectReason);
     }
@@ -1066,6 +1297,8 @@ export async function connectBrowserVoiceSession(
     }
     stopMicPump?.();
     stopMicPump = null;
+    clearIceDisconnectedTimer();
+    if (outageStartMs !== null) outageRestoreEligible = true;
     controlChannel = null;
     syncChannel = null;
     const localPc = pc;
@@ -1316,6 +1549,7 @@ export async function connectBrowserVoiceSession(
         updateConnectionSnapshot({ peerConnectionState: connectionState });
         if (connectionState === "connected") {
           if (!isPcCurrent()) return;
+          clearIceDisconnectedTimer();
           autoReconnectAttempts = 0;
           iceRecoveryAttempts = 0;
           stopIceStuckWatch();
@@ -1329,6 +1563,9 @@ export async function connectBrowserVoiceSession(
             );
           }
           syncOutboundAudioTrack();
+        } else if (connectionState === "disconnected") {
+          if (!isPcCurrent()) return;
+          noteIceDisconnected(localPc);
         } else if (connectionState === "failed") {
           if (!isPcCurrent()) return;
           handleTransportFailure("failed", "webrtc_failed");
@@ -1351,6 +1588,14 @@ export async function connectBrowserVoiceSession(
         if (!isPcCurrent()) return;
         const iceConnectionState = localPc.iceConnectionState ?? "new";
         debug?.info("webrtc", "ice_connection_state", iceConnectionState);
+        if (iceConnectionState === "disconnected") {
+          noteIceDisconnected(localPc);
+        } else if (
+          iceConnectionState === "connected" ||
+          iceConnectionState === "completed"
+        ) {
+          clearIceDisconnectedTimer();
+        }
         updateConnectionSnapshot({ iceConnectionState });
       };
 
@@ -1513,7 +1758,8 @@ export async function connectBrowserVoiceSession(
 
   const scheduleAutoReconnect = (reason: string): void => {
     if (gracefulDisconnect || reconnectPolicy === "new-session") return;
-    if (autoReconnectAttempts >= maxAutoReconnectAttempts) {
+    beginOutage(reason, Date.now(), false);
+    if (autoReconnectAttempts >= maxAutoReconnectAttemptsLimit()) {
       emitAutoReconnectExhausted(reason);
       return;
     }
@@ -1522,18 +1768,59 @@ export async function connectBrowserVoiceSession(
     awaitingReconnectedCallback = true;
     lastReconnectReason = reason;
     options.onReconnecting?.(autoReconnectAttempts, reconnectInfo(reason));
-    const delayMs = Math.min(1000 * 2 ** (autoReconnectAttempts - 1), 8000);
+    const delayMs =
+      RECONNECT_BACKOFF_MS[
+        Math.min(autoReconnectAttempts - 1, RECONNECT_BACKOFF_MS.length - 1)
+      ];
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (settleTimer) clearTimeout(settleTimer);
+    settleTimer = undefined;
     reconnectTimer = setTimeout(() => {
-      void reconnectSignaling().catch((error: unknown) => {
-        debug?.warn(
-          "session",
-          "auto_reconnect_failed",
-          error instanceof Error ? error.message : String(error),
-        );
-        scheduleAutoReconnect(reason);
-      });
+      outageRecoveryVia = "reconnect";
+      void reconnectSignaling()
+        .then(() => armSettleTimer(RECONNECT_SETTLE_MS, "reconnect"))
+        .catch((error: unknown) => {
+          if (error instanceof SessionEndedDuringReconnectError) {
+            endSessionDuringReconnect();
+            return;
+          }
+          debug?.warn(
+            "session",
+            "auto_reconnect_failed",
+            error instanceof Error ? error.message : String(error),
+          );
+          scheduleAutoReconnect(reason);
+        });
     }, delayMs);
+  };
+
+  type WsCloseDetail = { code?: number; reason?: string; wasClean?: boolean };
+
+  /**
+   * One structured line per signaling WebSocket failure (token redacted).
+   * `httpStatus` is only known on runtimes that expose the upgrade response (Node `ws`).
+   */
+  const logSignalingFailure = (input: {
+    phase: "connect" | "open";
+    url: string;
+    startedAtMs: number;
+    httpStatus?: number;
+    close?: WsCloseDetail;
+  }): void => {
+    const elapsedMs = Date.now() - (outageStartMs ?? input.startedAtMs);
+    const reason =
+      input.close?.reason && input.close.reason.length > 0
+        ? input.close.reason
+        : "n/a";
+    debug?.error(
+      "signaling",
+      "ws_error",
+      `signaling ws failed attempt=${autoReconnectAttempts} elapsed=${elapsedMs} phase=${input.phase} code=${
+        input.close?.code ?? "n/a"
+      } reason=${reason} httpStatus=${input.httpStatus ?? "n/a"} wasClean=${
+        input.close?.wasClean ?? "n/a"
+      } url=${redactSignalingUrlForLog(input.url)}`,
+    );
   };
 
   const attachWsHandlers = (localWs: WebSocket, boundEpoch: number): void => {
@@ -1589,9 +1876,15 @@ export async function connectBrowserVoiceSession(
       }
     };
 
-    localWs.onclose = () => {
+    localWs.onclose = (event?: WsCloseDetail) => {
       if (!isCurrentWs()) return;
       if (gracefulDisconnect || reconnectPolicy === "new-session") return;
+      logSignalingFailure({
+        phase: "open",
+        url: signalingUrl,
+        startedAtMs: Date.now(),
+        close: event,
+      });
       scheduleAutoReconnect("signaling_closed");
     };
   };
@@ -1602,6 +1895,21 @@ export async function connectBrowserVoiceSession(
   ): Promise<void> => {
     if (isReconnect) {
       assertReplacementAllowed();
+      // Close the old socket ourselves first; never wait for it to notice the outage.
+      const staleWs = ws;
+      if (staleWs) {
+        staleWs.onclose = null;
+        staleWs.onmessage = null;
+        staleWs.onerror = null;
+        try {
+          staleWs.close();
+        } catch {
+          /* ignore */
+        }
+        if (ws === staleWs) {
+          ws = null;
+        }
+      }
       const closeResult = await retirePeerConnection({
         preserveConnectedWait: true,
       });
@@ -1643,7 +1951,9 @@ export async function connectBrowserVoiceSession(
     }
     assertReplacementAllowed();
 
-    const nextWs = new runtime.WebSocket(signalingUrl);
+    const connectUrl = signalingUrl;
+    const connectStartedAtMs = Date.now();
+    const nextWs = new runtime.WebSocket(connectUrl);
     if (boundEpoch !== signalingEpoch) {
       try {
         nextWs.close();
@@ -1654,8 +1964,69 @@ export async function connectBrowserVoiceSession(
     }
     ws = nextWs;
 
+    const httpStatusOf = (): number | undefined => {
+      const status = (nextWs as unknown as { httpStatus?: unknown }).httpStatus;
+      return typeof status === "number" ? status : undefined;
+    };
     await new Promise<void>((resolve, reject) => {
+      let connectTimer: ReturnType<typeof setTimeout> | undefined;
+      let done = false;
+      /** `error` is followed by `close` (with code/reason) in the next task; wait for it briefly. */
+      let errorTimer: ReturnType<typeof setTimeout> | undefined;
+      const settle = (): void => {
+        if (connectTimer) clearTimeout(connectTimer);
+        connectTimer = undefined;
+        if (errorTimer) clearTimeout(errorTimer);
+        errorTimer = undefined;
+      };
+      /** Connect-phase failure: log once, then reject (401 on reconnect = session gone). */
+      const failConnect = (
+        close: WsCloseDetail | undefined,
+        error: Error,
+      ): void => {
+        if (done) return;
+        done = true;
+        settle();
+        const httpStatus = httpStatusOf();
+        logSignalingFailure({
+          phase: "connect",
+          url: connectUrl,
+          startedAtMs: connectStartedAtMs,
+          httpStatus,
+          close,
+        });
+        reject(
+          isReconnect && httpStatus === 401
+            ? new SessionEndedDuringReconnectError()
+            : error,
+        );
+      };
+      if (isReconnect) {
+        connectTimer = setTimeout(() => {
+          connectTimer = undefined;
+          if (ws !== nextWs || boundEpoch !== signalingEpoch) {
+            reject(new Error("WebSocket superseded during reconnect"));
+            return;
+          }
+          nextWs.onopen = null;
+          nextWs.onerror = null;
+          nextWs.onclose = null;
+          try {
+            nextWs.close();
+          } catch {
+            /* ignore */
+          }
+          failConnect(
+            undefined,
+            new Error(
+              `WebSocket did not open within ${SIGNALING_CONNECT_TIMEOUT_MS}ms`,
+            ),
+          );
+        }, SIGNALING_CONNECT_TIMEOUT_MS);
+      }
       nextWs.onopen = () => {
+        done = true;
+        settle();
         if (ws !== nextWs || boundEpoch !== signalingEpoch) {
           reject(new Error("WebSocket superseded during reconnect"));
           return;
@@ -1669,6 +2040,7 @@ export async function connectBrowserVoiceSession(
       };
       nextWs.onerror = () => {
         if (ws !== nextWs || boundEpoch !== signalingEpoch) {
+          settle();
           reject(new Error("WebSocket superseded during reconnect"));
           return;
         }
@@ -1681,12 +2053,15 @@ export async function connectBrowserVoiceSession(
           }),
           { fallbackLog: false },
         );
-        debug?.error(
-          "signaling",
-          "ws_error",
-          redactSignalingUrlForLog(signalingUrl),
-        );
-        reject(new Error("WebSocket error"));
+        errorTimer ??= setTimeout(() => {
+          errorTimer = undefined;
+          failConnect(undefined, new Error("WebSocket error"));
+        }, 0);
+      };
+      // Close before open (with or without a preceding `error`) carries code/reason.
+      nextWs.onclose = (event?: WsCloseDetail) => {
+        if (ws !== nextWs || boundEpoch !== signalingEpoch) return;
+        failConnect(event, new Error("WebSocket closed before open"));
       };
     });
     if (boundEpoch !== signalingEpoch) {
@@ -1777,6 +2152,22 @@ export async function connectBrowserVoiceSession(
       throw new Error("voicethere-sync data channel is not open");
     }
     return syncChannel;
+  };
+
+  /**
+   * Best-effort explicit hangup on the control channel. Only for integrator-initiated
+   * ends, never for reconnects or unintentional loss.
+   */
+  const sendClientHangup = (): RTCDataChannel | null => {
+    const channel = controlChannel;
+    if (!channel || channel.readyState !== "open") return null;
+    try {
+      channel.send(JSON.stringify({ type: CLIENT_HANGUP_MESSAGE_TYPE }));
+      debug?.info("session", "client_hangup_sent");
+      return channel;
+    } catch {
+      return null;
+    }
   };
 
   const waitForConnected = async (timeoutMs = 60_000): Promise<void> => {
@@ -2001,6 +2392,7 @@ export async function connectBrowserVoiceSession(
     },
     disconnect: () => {
       // Sync terminal invalidation — must not await native close (reconnect opens WS promptly).
+      if (!gracefulDisconnect) sendClientHangup();
       gracefulDisconnect = true;
       negotiationGeneration += 1;
       activePcGeneration = 0;
@@ -2009,6 +2401,7 @@ export async function connectBrowserVoiceSession(
       signalingEpoch += 1;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       reconnectTimer = undefined;
+      clearRecoveryTimers();
       awaitingReconnectedCallback = false;
       stopMicPump?.();
       stopMicPump = null;
@@ -2096,6 +2489,17 @@ export async function connectBrowserVoiceSession(
       }
 
       disconnectAsyncInFlight = (async (): Promise<PeerCloseResult> => {
+        const hangupChannel = gracefulDisconnect ? null : sendClientHangup();
+        if (hangupChannel) {
+          const drainDeadline = Date.now() + CLIENT_HANGUP_DRAIN_MS;
+          while (
+            hangupChannel.readyState === "open" &&
+            (hangupChannel.bufferedAmount ?? 0) > 0 &&
+            Date.now() < drainDeadline
+          ) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 10));
+          }
+        }
         gracefulDisconnect = true;
         negotiationGeneration += 1;
         activePcGeneration = 0;
@@ -2103,6 +2507,7 @@ export async function connectBrowserVoiceSession(
         signalingEpoch += 1;
         if (reconnectTimer) clearTimeout(reconnectTimer);
         reconnectTimer = undefined;
+        clearRecoveryTimers();
         awaitingReconnectedCallback = false;
         stopMicPump?.();
         stopMicPump = null;

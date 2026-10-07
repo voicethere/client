@@ -1094,3 +1094,66 @@ describe("createVoiceThereWidgetAsync", () => {
     });
   });
 });
+
+describe("createVoiceThereWidget connection recovery", () => {
+  it("widget shows the reconnecting message on interrupted and the lost message on lost", async () => {
+    createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      mode: BrowserSessionModeType.Voice,
+      mount: mount as unknown as HTMLElement,
+    });
+    const connectBtn = findButtonByText(mount, "Connect")!;
+    connectBtn.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const session = await connectBrowserSession.mock.results[0]!.value;
+    const { onConnectionStatus } = connectBrowserSession.mock.calls[0]![0] as {
+      onConnectionStatus: (status: Record<string, unknown>) => void;
+    };
+    const statusLine = createdElements.find((el) =>
+      el.classList.contains(WIDGET_CSS_CLASSES.status),
+    )!;
+    const [spinner, text] = statusLine.children;
+    const base = {
+      ready: false,
+      phase: "connecting",
+      signalingJoined: true,
+      peerConnectionState: "disconnected",
+      inboundAudioTrack: true,
+      outboundAudioTrack: true,
+      controlChannelOpen: true,
+      syncChannelOpen: true,
+    };
+
+    onConnectionStatus({
+      ...base,
+      recovery: {
+        state: "interrupted",
+        sinceMs: 2000,
+        message: "Connection lost. Reconnecting…",
+      },
+    });
+    expect(text!.textContent).toBe("Connection lost. Reconnecting…");
+    expect(spinner!.style.display).toBe("inline-block");
+
+    onConnectionStatus({
+      ...base,
+      phase: "closed",
+      recovery: {
+        state: "lost",
+        reason: "WEBRTC_RECONNECT_EXHAUSTED",
+        message:
+          "The connection could not be restored. Please start a new conversation.",
+      },
+    });
+    expect(text!.textContent).toBe(
+      "The connection could not be restored. Please start a new conversation.",
+    );
+    expect(spinner!.style.display).toBe("none");
+    expect(session.disconnect).toHaveBeenCalled();
+    // Start button is usable again for a new conversation.
+    expect(connectBtn.textContent).toBe("Connect");
+  });
+});

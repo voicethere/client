@@ -95,6 +95,30 @@ Billing starts when the runner reports a billable WebRTC leg (voice: connected P
 
 Pass `reconnectPolicy: "new-session"` to disable automatic same-session retry.
 
+## Connection drops and reconnect
+
+A short network outage must not end the conversation. After the session was ready once, the client watches the transport and keeps trying to restore it for `reconnectBudgetMs` (default `45000`) counted from the first loss.
+
+- **Detection.** ICE `disconnected` lasting more than 2 s, ICE/peer `failed`, or the signaling WebSocket closing unexpectedly. Recovery starts at most 3 s after the loss.
+- **Recovery.** The client closes the old signaling socket itself, opens a new one with the latest `session_reconnect_token` (or the join token if none arrived yet) and rejoins the same session. Each socket gets 5 s to open. Failed attempts retry after 1 s, 2 s, 4 s, then every 5 s until the budget is spent.
+- **Giving up.** When the budget runs out the session emits `WEBRTC_RECONNECT_EXHAUSTED`. If the gateway answers a reconnect with HTTP 401 (Node runtime, where the status is readable) the session is gone and the client stops at once with `SESSION_ENDED_DURING_RECONNECT`.
+- **Compatibility.** `maxAutoReconnectAttempts` is still accepted and acts as an extra cap on attempts. Without it, a session that was ready is limited only by the budget.
+
+`onConnectionStatus` receives a `recovery` field on the status object while this happens:
+
+| `recovery.state` | Extra fields                                    | Default message                                                                 |
+| ---------------- | ----------------------------------------------- | ------------------------------------------------------------------------------- |
+| `interrupted`    | `sinceMs`                                       | `Connection lost. Reconnecting…`                                                |
+| `restored`       | `downtimeMs`, `via` (`ice-restart`/`reconnect`) | `Reconnected.`                                                                  |
+| `lost`           | `reason` (session error code)                   | `The connection could not be restored. Please start a new conversation.`        |
+| `lost`           | `reason: "SESSION_ENDED_DURING_RECONNECT"`      | `The conversation ended while the connection was down. Please start a new one.` |
+
+The default texts are exported as `CONNECTION_INTERRUPTED_MESSAGE`, `CONNECTION_RESTORED_MESSAGE`, `CONNECTION_LOST_MESSAGE` and `CONNECTION_SESSION_ENDED_MESSAGE`; pass `connectionStatusMessages` to override them. The embed widget shows them in its status line and re-enables the Connect button on `lost`.
+
+Every signaling WebSocket failure is logged as one `signaling/ws_error` debug line: `signaling ws failed attempt=<n> elapsed=<ms> phase=<connect|open> code=<closeCode> reason=<closeReason> httpStatus=<status|n/a> wasClean=<bool> url=<redacted>`. It appears in `createDebugConsole().exportText()`.
+
+When you end a session with `disconnect()` or `disconnectAsync()`, the client first sends `{ "type": "client_hangup" }` (`CLIENT_HANGUP_MESSAGE_TYPE`) on the control channel so the runner closes right away instead of waiting out its drop grace period. It is never sent on reconnects or after an unintentional loss.
+
 ## Signaling `peerId` (voice sessions)
 
 When connecting to a **VoiceThere runner** or any server using `@node-webrtc-rust/helpers` `VoiceAgentSessionHost`:
