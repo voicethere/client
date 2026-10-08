@@ -542,7 +542,7 @@ describe("connectBrowserVoiceSession time-budgeted recovery", () => {
     expect(MockWebSocket.instances.length).toBe(wsCount);
   });
 
-  it("a dead attempt at budget end: ice_failed is logged and recovery ends by the grace end", async () => {
+  it("a dead attempt in backoff at budget end gets no grace", async () => {
     vi.useFakeTimers();
     const { replacement, errors, debugLines } = await startCheckingAttempt({
       reconnectBudgetMs: 5_000,
@@ -550,11 +550,24 @@ describe("connectBrowserVoiceSession time-budgeted recovery", () => {
     replacement.pairStates = ["failed", "failed"];
     await vi.advanceTimersByTimeAsync(2_100);
     expect(debugLines.some((l) => l.includes(ICE_FAILED_LINE))).toBe(true);
-    // Attempt 2 is in its 2 s backoff when the 5 s budget ends, so the stale
-    // peer connection still counts as in flight and the grace (5 s to 9 s) runs.
-    expect(exhausted(errors)).toBe(false);
-    await vi.advanceTimersByTimeAsync(6_000);
+    // Attempt 2 is in its 2 s backoff (fires at ~5.1 s); the budget ends at 5 s.
+    await vi.advanceTimersByTimeAsync(3_000);
     expect(exhausted(errors)).toBe(true);
+    expect(
+      debugLines.some((l) => l.includes("session/reconnect_inflight_grace")),
+    ).toBe(false);
+  });
+
+  it("attempt 2 after a dead attempt connects and restores", async () => {
+    vi.useFakeTimers();
+    const { session, replacement, errors } = await startCheckingAttempt();
+    replacement.pairStates = ["failed", "failed", "failed"];
+    await vi.advanceTimersByTimeAsync(2_100);
+    await vi.advanceTimersByTimeAsync(2_100);
+    await completeReconnect();
+    expect(session.getConnectionStatus().recovery?.state).toBe("restored");
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(exhausted(errors)).toBe(false);
   });
 
   it("server window 30000 extends the budget to 30 s", async () => {

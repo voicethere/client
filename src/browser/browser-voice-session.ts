@@ -2021,7 +2021,6 @@ export async function connectBrowserVoiceSession(
     // The budget ended while an attempt was connecting: that attempt gets the grace.
     if (inflightGraceActive) return;
     stopDeadPairsProbe();
-    replacementIceDead = false;
     reconnectJoinedWs = null;
     clearIceDisconnectedTimer();
     beginOutage(reason, Date.now(), false);
@@ -2042,6 +2041,7 @@ export async function connectBrowserVoiceSession(
     if (settleTimer) clearTimeout(settleTimer);
     settleTimer = undefined;
     reconnectTimer = setTimeout(() => {
+      replacementIceDead = false;
       outageRecoveryVia = "reconnect";
       void reconnectSignaling(true)
         .then(() => armSettleTimer(RECONNECT_SETTLE_MS, "reconnect"))
