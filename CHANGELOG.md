@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.11.9] - 2026-10-08
+
+### Fixed
+
+- Recovery: once the session is restored, any reconnect attempt still waiting to start is cancelled, whichever way the connection came back.
+- Recovery: a reconnect attempt whose connection is up but still opening its data channel is given time to finish instead of being replaced.
+
 ## [0.11.8] - 2026-10-08
 
 ### Fixed

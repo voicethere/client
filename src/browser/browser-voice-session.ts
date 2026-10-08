@@ -913,6 +913,12 @@ export async function connectBrowserVoiceSession(
     ) {
       return false;
     }
+    if (
+      state === "connected" &&
+      !isWebRtcConnectionReady(connectionSnapshot, readinessProfile)
+    ) {
+      return true;
+    }
     return ice === "checking" || state === "connecting";
   };
 
@@ -1057,14 +1063,14 @@ export async function connectBrowserVoiceSession(
     outageStartMs = null;
     outageRestoreEligible = false;
     clearRecoveryTimers();
-    // The original connection came back before the queued attempt started: drop it.
-    if (outageRecoveryVia === "ice-restart" && reconnectTimer) {
+    // The session is back: an attempt still waiting to start would replace a healthy connection.
+    if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = undefined;
       debug?.info(
         "session",
         "reconnect_cancelled",
-        `restored_before_attempt attempt=${autoReconnectAttempts}`,
+        `restored_before_attempt via=${outageRecoveryVia} attempt=${autoReconnectAttempts}`,
       );
     }
     debug?.info(
@@ -1294,6 +1300,7 @@ export async function connectBrowserVoiceSession(
     );
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined;
       void reconnectSignaling(true)
         .then(() => armSettleTimer(ICE_RECOVERY_SETTLE_MS, "ice_recovery"))
         .catch((error: unknown) => {
@@ -2054,6 +2061,7 @@ export async function connectBrowserVoiceSession(
     if (settleTimer) clearTimeout(settleTimer);
     settleTimer = undefined;
     reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined;
       replacementIceDead = false;
       outageRecoveryVia = "reconnect";
       void reconnectSignaling(true)
