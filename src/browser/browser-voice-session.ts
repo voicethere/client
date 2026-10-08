@@ -518,6 +518,25 @@ export async function connectBrowserVoiceSession(
   let quarantinedPc: RTCPeerConnection | null = null;
   /** Per-PC intentional retire tracking (replaces a global ignore boolean). */
   const intentionallyRetiringPcs = new WeakSet<RTCPeerConnection>();
+  /**
+   * Peer connections retired by recovery but not yet closed. Closing the old PC
+   * before the replacement connects can reach the server as a remote close of the
+   * control channel, which it reads as a hang-up. They close once the replacement
+   * is connected, or when recovery ends.
+   */
+  const deferredOldPcs: RTCPeerConnection[] = [];
+  const closeDeferredOldPeerConnections = (): void => {
+    const olds = deferredOldPcs.splice(0, deferredOldPcs.length);
+    for (const old of olds) {
+      if (old === quarantinedPc) continue;
+      intentionallyRetiringPcs.add(old);
+      try {
+        old.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  };
 
   const clearPendingIceGenerations = (keepGeneration?: number): void => {
     if (keepGeneration === undefined) {
@@ -830,6 +849,7 @@ export async function connectBrowserVoiceSession(
     logDetail: string;
   }): void => {
     if (gracefulDisconnect) return;
+    closeDeferredOldPeerConnections();
     awaitingReconnectedCallback = false;
     debug?.warn("session", input.logName, input.logDetail);
     gracefulDisconnect = true;
@@ -1047,7 +1067,7 @@ export async function connectBrowserVoiceSession(
     );
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
-      void reconnectSignaling()
+      void reconnectSignaling(true)
         .then(() => armSettleTimer(ICE_RECOVERY_SETTLE_MS, "ice_recovery"))
         .catch((error: unknown) => {
           if (error instanceof SessionEndedDuringReconnectError) {
@@ -1079,7 +1099,10 @@ export async function connectBrowserVoiceSession(
       occurred_at: new Date().toISOString(),
     });
     rejectConnectedWait(new Error("peer connection ice stuck checking"), true);
-    await retirePeerConnection({ preserveConnectedWait: true });
+    await retirePeerConnection({
+      preserveConnectedWait: true,
+      deferClose: true,
+    });
     scheduleIceRecovery("ice_stuck_checking");
   };
 
@@ -1295,6 +1318,8 @@ export async function connectBrowserVoiceSession(
    */
   const retirePeerConnection = async (retireOptions?: {
     preserveConnectedWait?: boolean;
+    /** Recovery: detach the old PC but keep it open until the replacement connects. */
+    deferClose?: boolean;
   }): Promise<PeerCloseResult> => {
     if (replacementBlockedResult) {
       return replacementBlockedResult;
@@ -1335,6 +1360,20 @@ export async function connectBrowserVoiceSession(
     micRtpSender = null;
     // Detach from live slot before awaiting close so handlers see identity change.
     pc = null;
+    if (retireOptions?.deferClose) {
+      localPc.ontrack = null;
+      localPc.ondatachannel = null;
+      localPc.onicecandidate = null;
+      localPc.oniceconnectionstatechange = null;
+      localPc.onicegatheringstatechange = null;
+      deferredOldPcs.push(localPc);
+      return {
+        status: "closed",
+        mode: "sync",
+        durationMs: 0,
+        timedOut: false,
+      };
+    }
     const closeResult = await closePeerConnectionAwaitable(localPc);
     if (closeResult.status !== "closed") {
       // Never invent closed later — retain unsafe PC, block replacement forever.
@@ -1553,6 +1592,7 @@ export async function connectBrowserVoiceSession(
         updateConnectionSnapshot({ peerConnectionState: connectionState });
         if (connectionState === "connected") {
           if (!isPcCurrent()) return;
+          closeDeferredOldPeerConnections();
           clearIceDisconnectedTimer();
           autoReconnectAttempts = 0;
           iceRecoveryAttempts = 0;
@@ -1781,7 +1821,7 @@ export async function connectBrowserVoiceSession(
     settleTimer = undefined;
     reconnectTimer = setTimeout(() => {
       outageRecoveryVia = "reconnect";
-      void reconnectSignaling()
+      void reconnectSignaling(true)
         .then(() => armSettleTimer(RECONNECT_SETTLE_MS, "reconnect"))
         .catch((error: unknown) => {
           if (error instanceof SessionEndedDuringReconnectError) {
@@ -1896,6 +1936,7 @@ export async function connectBrowserVoiceSession(
   const joinSignalingRoom = async (
     isReconnect: boolean,
     boundEpoch: number,
+    deferOldPeerClose = false,
   ): Promise<void> => {
     if (isReconnect) {
       assertReplacementAllowed();
@@ -1916,6 +1957,7 @@ export async function connectBrowserVoiceSession(
       }
       const closeResult = await retirePeerConnection({
         preserveConnectedWait: true,
+        deferClose: deferOldPeerClose,
       });
       emitDiagnosticSafely(options.onDiagnosticEvent, {
         type: "peer_close",
@@ -2087,7 +2129,8 @@ export async function connectBrowserVoiceSession(
     }
   };
 
-  const reconnectSignaling = (): Promise<void> => {
+  /** `recovery` (automatic) keeps the old PC open until the replacement connects. */
+  const reconnectSignaling = (recovery = false): Promise<void> => {
     if (gracefulDisconnect) {
       return Promise.resolve();
     }
@@ -2103,7 +2146,7 @@ export async function connectBrowserVoiceSession(
       return reconnectFlight;
     }
     const epoch = ++signalingEpoch;
-    const flight = joinSignalingRoom(true, epoch).finally(() => {
+    const flight = joinSignalingRoom(true, epoch, recovery).finally(() => {
       if (reconnectFlight === flight) {
         reconnectFlight = null;
       }
@@ -2398,6 +2441,7 @@ export async function connectBrowserVoiceSession(
       // Sync terminal invalidation — must not await native close (reconnect opens WS promptly).
       if (!gracefulDisconnect) sendClientHangup();
       gracefulDisconnect = true;
+      closeDeferredOldPeerConnections();
       negotiationGeneration += 1;
       activePcGeneration = 0;
       clearPendingIceGenerations();
@@ -2505,6 +2549,7 @@ export async function connectBrowserVoiceSession(
           }
         }
         gracefulDisconnect = true;
+        closeDeferredOldPeerConnections();
         negotiationGeneration += 1;
         activePcGeneration = 0;
         clearPendingIceGenerations();
