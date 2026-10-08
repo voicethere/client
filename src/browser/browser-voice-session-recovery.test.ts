@@ -468,6 +468,99 @@ describe("recovery keeps the old peer connection until it is replaced", () => {
     expect(oldControl.sent).toEqual([]);
   });
 
+  it("a second recovery in the same session keeps the current connection until the replacement join", async () => {
+    vi.useFakeTimers();
+    await connectReady();
+    const firstPc = MockPeerConnection.instances[0]!;
+    setIce(firstPc, "disconnected");
+    await vi.advanceTimersByTimeAsync(9_000);
+    await completeReconnect();
+    expect(MockPeerConnection.instances.length).toBe(2);
+
+    const currentPc = MockPeerConnection.instances[1]!;
+    const currentControl = openedControlChannels[1]!;
+    const pcClose = vi.spyOn(currentPc, "close");
+    const dcClose = vi.spyOn(currentControl, "close");
+    const wsBefore = MockWebSocket.instances.length;
+
+    setIce(currentPc, "disconnected");
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(MockWebSocket.instances.length).toBeGreaterThan(wsBefore);
+    expect(pcClose).not.toHaveBeenCalled();
+    expect(dcClose).not.toHaveBeenCalled();
+
+    // Fresh server offer for the re-joined peer: the current PC must still stay open.
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await flush();
+    expect(MockPeerConnection.instances.length).toBe(3);
+    expect(pcClose).not.toHaveBeenCalled();
+    expect(dcClose).not.toHaveBeenCalled();
+    expect(currentControl.sent).toEqual([]);
+
+    openDataChannels(MockPeerConnection.instances[2]!);
+    await flush();
+    expect(pcClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("a second recovery after a relay-then-reconnect first recovery keeps the current connection", async () => {
+    vi.useFakeTimers();
+    await connectReady();
+    setIce(MockPeerConnection.instances[0]!, "disconnected");
+    await vi.advanceTimersByTimeAsync(9_000);
+    // Relay rejoin: the replacement offer arrives but ICE never connects.
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await flush();
+    await vi.advanceTimersByTimeAsync(6_000);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await completeReconnect();
+    const currentPc = MockPeerConnection.instances.at(-1)!;
+    const currentControl = openedControlChannels.at(-1)!;
+    const countBefore = MockPeerConnection.instances.length;
+    const pcClose = vi.spyOn(currentPc, "close");
+    const dcClose = vi.spyOn(currentControl, "close");
+    const wsBefore = MockWebSocket.instances.length;
+
+    setIce(currentPc, "disconnected");
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(MockWebSocket.instances.length).toBeGreaterThan(wsBefore);
+    expect(pcClose).not.toHaveBeenCalled();
+    expect(dcClose).not.toHaveBeenCalled();
+
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await flush();
+    expect(MockPeerConnection.instances.length).toBe(countBefore + 1);
+    expect(pcClose).not.toHaveBeenCalled();
+    expect(dcClose).not.toHaveBeenCalled();
+  });
+
+  it("third consecutive recovery also keeps the current connection until replaced", async () => {
+    vi.useFakeTimers();
+    await connectReady();
+    for (let round = 0; round < 2; round += 1) {
+      setIce(MockPeerConnection.instances.at(-1)!, "disconnected");
+      await vi.advanceTimersByTimeAsync(9_000);
+      await completeReconnect();
+    }
+    expect(MockPeerConnection.instances.length).toBe(3);
+
+    const currentPc = MockPeerConnection.instances[2]!;
+    const currentControl = openedControlChannels[2]!;
+    const pcClose = vi.spyOn(currentPc, "close");
+    const dcClose = vi.spyOn(currentControl, "close");
+
+    setIce(currentPc, "disconnected");
+    await vi.advanceTimersByTimeAsync(9_000);
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await flush();
+    expect(MockPeerConnection.instances.length).toBe(4);
+    expect(pcClose).not.toHaveBeenCalled();
+    expect(dcClose).not.toHaveBeenCalled();
+
+    openDataChannels(MockPeerConnection.instances[3]!);
+    await flush();
+    expect(pcClose).toHaveBeenCalledTimes(1);
+  });
+
   it("the old peer connection is closed after the replacement connects", async () => {
     vi.useFakeTimers();
     await connectReady();
