@@ -97,10 +97,10 @@ Pass `reconnectPolicy: "new-session"` to disable automatic same-session retry.
 
 ## Connection drops and reconnect
 
-A short network outage must not end the conversation. After the session was ready once, the client watches the transport and keeps trying to restore it for `reconnectBudgetMs` (default `20000`, because the platform keeps a dropped session for about 15 s) counted from the first loss.
+A short network outage must not end the conversation. After the session was ready once, the client watches the transport and keeps trying to restore it for `reconnectBudgetMs` (default `15000`, because the platform keeps a dropped session for about 15 s) counted from the first loss.
 
-- **Detection.** ICE `disconnected` lasting more than 2 s (the status shows "Reconnecting…"), ICE/peer `failed`, or the signaling WebSocket closing unexpectedly. A `disconnected` connection gets `rejoinAfterDisconnectedMs` (default `8000`) to come back on its own before the client rejoins, because a rejoin replaces the old connection on the server; `failed` and a signaling close with the transport down rejoin at once.
-- **Recovery.** The client closes the old signaling socket itself, opens a new one with the latest `session_reconnect_token` (or the join token if none arrived yet) and rejoins the same session. Each socket gets 5 s to open. Failed attempts retry after 1 s, 2 s, 4 s, then every 5 s until the budget is spent.
+- **Detection.** ICE `disconnected` lasting more than 2 s (the status shows "Reconnecting…"), ICE/peer `failed`, or the signaling WebSocket closing unexpectedly. A `disconnected` connection gets `rejoinAfterDisconnectedMs` (default `5000`) to come back on its own before the client rejoins, because a rejoin replaces the old connection on the server; `failed` and a signaling close with the transport down rejoin at once.
+- **Recovery.** The client closes the old signaling socket itself, opens a new one with the latest `session_reconnect_token` (or the join token if none arrived yet) and rejoins the same session. The first action is always this same-session reconnect, with no relay detour. Each socket gets 4 s to open and each attempt 6 s to become ready. Attempts start after 1 s, then retry after 2 s each until the budget is spent.
 - **Giving up.** When the budget runs out the session emits `WEBRTC_RECONNECT_EXHAUSTED`. If the gateway answers a reconnect with HTTP 401 (Node runtime, where the status is readable) the session is gone and the client stops at once with `SESSION_ENDED_DURING_RECONNECT`.
 - **Compatibility.** `maxAutoReconnectAttempts` is still accepted and acts as an extra cap on attempts. Without it, a session that was ready is limited only by the budget.
 

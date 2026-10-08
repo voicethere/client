@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-10-08
+
+### Changed
+
+- Recovery rejoins after 5 s (was 8 s) without the relay detour and gives up after 15 s (was 20 s), matching how long the platform keeps a dropped conversation.
+
 ## [0.11.3] - 2026-10-08
 
 ### Fixed
