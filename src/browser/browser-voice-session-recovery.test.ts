@@ -485,6 +485,52 @@ describe("connectBrowserVoiceSession time-budgeted recovery", () => {
     expect(MockWebSocket.instances.length).toBe(wsCount);
   });
 
+  it("a queued attempt is cancelled when a reconnect attempt restores the session", async () => {
+    vi.useFakeTimers();
+    const onReconnected = vi.fn();
+    const { session, replacement, debugLines } = await startCheckingAttempt({
+      onReconnected,
+    });
+    // The replacement drops, which queues attempt 2 behind its backoff ...
+    replacement.fail();
+    await flush();
+    const wsCount = MockWebSocket.instances.length;
+    // ... then comes back and opens its channels before that attempt starts.
+    setIce(replacement, "connected");
+    openDataChannels(replacement);
+    await flush();
+    expect(session.getConnectionStatus().recovery?.state).toBe("restored");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(MockWebSocket.instances.length).toBe(wsCount);
+    expect(
+      debugLines.some(
+        (l) => l.includes("reconnect_cancelled") && l.includes("via=reconnect"),
+      ),
+    ).toBe(true);
+    expect(session.getConnectionStatus().recovery?.state).toBe("restored");
+  });
+
+  it("settle timer extends while the replacement is connected but its data channel is not open", async () => {
+    vi.useFakeTimers();
+    const onReconnected = vi.fn();
+    const { session, replacement, debugLines } = await startCheckingAttempt({
+      onReconnected,
+    });
+    setIce(replacement, "connected");
+    replacement.connect();
+    const wsCount = MockWebSocket.instances.length;
+    await vi.advanceTimersByTimeAsync(6_500);
+    expect(
+      debugLines.some((l) => l.includes("reconnect_settle_extended")),
+    ).toBe(true);
+    expect(MockWebSocket.instances.length).toBe(wsCount);
+    openDataChannels(replacement);
+    await flush();
+    expect(session.getConnectionStatus().recovery?.state).toBe("restored");
+    expect(onReconnected).toHaveBeenCalledTimes(1);
+    expect(MockWebSocket.instances.length).toBe(wsCount);
+  });
+
   it("an attempt in flight at budget end gets the grace and restores", async () => {
     vi.useFakeTimers();
     const { session, replacement, errors } = await startCheckingAttempt({
