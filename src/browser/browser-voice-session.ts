@@ -128,8 +128,15 @@ function redactSignalingUrlForLog(url: string): string {
  * only ends in a 401 and `SESSION_ENDED_DURING_RECONNECT`.
  */
 export const DEFAULT_RECONNECT_BUDGET_MS = 20_000;
-/** ICE `disconnected` must last this long before recovery starts. */
+/** ICE `disconnected` must last this long before the user sees "interrupted". */
 const ICE_DISCONNECTED_GRACE_MS = 2_000;
+/**
+ * Default time an ICE `disconnected` connection gets to come back on its own before
+ * the client rejoins. The platform keeps a dropped peer for about 10 s, and a rejoin
+ * replaces (destroys) the old peer on the server, so rejoining early can turn a
+ * recoverable blip into a lost session.
+ */
+export const DEFAULT_REJOIN_AFTER_DISCONNECTED_MS = 8_000;
 /** Time the relay ICE recovery rejoin gets to reach readiness before escalating. */
 const ICE_RECOVERY_SETTLE_MS = 5_000;
 /** Time a same-session reconnect gets to reach readiness before the next attempt. */
@@ -235,6 +242,13 @@ export type BrowserVoiceSessionOptions = {
    * `WEBRTC_RECONNECT_EXHAUSTED` and a `lost` {@link WebRtcConnectionStatus.recovery}.
    */
   reconnectBudgetMs?: number;
+  /**
+   * How long (default 8000 ms) a connection may stay ICE `disconnected` before the
+   * client rejoins the session. The "interrupted" status is published after 2 s; if the
+   * connection returns within this window it is restored without a rejoin. A `failed`
+   * connection or a signaling close while the transport is down rejoins immediately.
+   */
+  rejoinAfterDisconnectedMs?: number;
   /**
    * Overrides the default human messages carried on
    * {@link WebRtcConnectionStatus.recovery}.
@@ -583,6 +597,8 @@ export async function connectBrowserVoiceSession(
   const reconnectPolicy = options.reconnectPolicy ?? "same-session";
   const reconnectBudgetMs =
     options.reconnectBudgetMs ?? DEFAULT_RECONNECT_BUDGET_MS;
+  const rejoinAfterDisconnectedMs =
+    options.rejoinAfterDisconnectedMs ?? DEFAULT_REJOIN_AFTER_DISCONNECTED_MS;
   const statusMessages = {
     interrupted:
       options.connectionStatusMessages?.interrupted ??
@@ -990,7 +1006,17 @@ export async function connectBrowserVoiceSession(
       iceDisconnectedTimer = undefined;
       if (pc !== localPc || gracefulDisconnect) return;
       beginOutage("ice_disconnected", lossAtMs, true);
-      startRecovery("ice_disconnected");
+      // Keep the old peer alive: a rejoin replaces it on the server. Wait for it to
+      // come back on its own until the connection has been disconnected long enough.
+      const waitMs = Math.max(
+        0,
+        lossAtMs + rejoinAfterDisconnectedMs - Date.now(),
+      );
+      iceDisconnectedTimer = setTimeout(() => {
+        iceDisconnectedTimer = undefined;
+        if (pc !== localPc || gracefulDisconnect) return;
+        startRecovery("ice_disconnected");
+      }, waitMs);
     }, ICE_DISCONNECTED_GRACE_MS);
   };
 
@@ -1048,6 +1074,7 @@ export async function connectBrowserVoiceSession(
 
   const scheduleIceRecovery = (reason: string): void => {
     if (gracefulDisconnect || reconnectPolicy === "new-session") return;
+    clearIceDisconnectedTimer();
     if (!canIceRecover()) {
       if (canAutoReconnectTransport()) {
         scheduleAutoReconnect(reason);
@@ -1802,6 +1829,7 @@ export async function connectBrowserVoiceSession(
 
   const scheduleAutoReconnect = (reason: string): void => {
     if (gracefulDisconnect || reconnectPolicy === "new-session") return;
+    clearIceDisconnectedTimer();
     beginOutage(reason, Date.now(), false);
     if (autoReconnectAttempts >= maxAutoReconnectAttemptsLimit()) {
       emitAutoReconnectExhausted(reason);
