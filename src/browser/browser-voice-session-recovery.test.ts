@@ -399,6 +399,72 @@ describe("connectBrowserVoiceSession time-budgeted recovery", () => {
   });
 });
 
+describe("recovery keeps the old peer connection until it is replaced", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    MockWebSocket.instances = [];
+    MockWebSocket.mode = "open";
+    MockPeerConnection.instances = [];
+    MockPeerConnection.nextOptions = {};
+    openedControlChannels.length = 0;
+  });
+
+  it("recovery does not close the old peer connection or its data channels before the replacement join", async () => {
+    vi.useFakeTimers();
+    await connectReady();
+    const oldPc = MockPeerConnection.instances[0]!;
+    const oldControl = openedControlChannels[0]!;
+    const pcClose = vi.spyOn(oldPc, "close");
+    const dcClose = vi.spyOn(oldControl, "close");
+    const wsBefore = MockWebSocket.instances.length;
+
+    setIce(oldPc, "disconnected");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(MockWebSocket.instances.length).toBeGreaterThan(wsBefore);
+
+    // Replacement offer arrives and a new PC exists, but it is not connected yet.
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await flush();
+    expect(MockPeerConnection.instances.length).toBe(2);
+    expect(pcClose).not.toHaveBeenCalled();
+    expect(dcClose).not.toHaveBeenCalled();
+    expect(oldControl.sent).toEqual([]);
+  });
+
+  it("the old peer connection is closed after the replacement connects", async () => {
+    vi.useFakeTimers();
+    await connectReady();
+    const oldPc = MockPeerConnection.instances[0]!;
+    const pcClose = vi.spyOn(oldPc, "close");
+
+    setIce(oldPc, "disconnected");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await completeReconnect();
+
+    expect(MockPeerConnection.instances.length).toBe(2);
+    expect(pcClose).toHaveBeenCalledTimes(1);
+    expect(openedControlChannels[0]!.sent).toEqual([]);
+  });
+
+  it("the old peer connection is closed when recovery gives up", async () => {
+    vi.useFakeTimers();
+    const { errors } = await connectReady();
+    const oldPc = MockPeerConnection.instances[0]!;
+    const pcClose = vi.spyOn(oldPc, "close");
+    MockWebSocket.mode = "error";
+
+    oldPc.fail();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(pcClose).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(16_000);
+
+    expect(errors.some((e) => e.code === "WEBRTC_RECONNECT_EXHAUSTED")).toBe(
+      true,
+    );
+    expect(pcClose).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("reconnect token rejected by the gateway (Node ws)", () => {
   it("a 401 on the reconnect token ends immediately with SESSION_ENDED_DURING_RECONNECT", async () => {
     let upgrades = 0;

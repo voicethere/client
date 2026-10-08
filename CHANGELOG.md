@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-10-08
+
+### Fixed
+
+- Recovery no longer closes the old connection before reconnecting; the platform could read that close as a hang-up and end the conversation.
+
 ## [0.11.1] - 2026-10-08
 
 ### Changed
