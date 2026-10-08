@@ -124,27 +124,27 @@ function redactSignalingUrlForLog(url: string): string {
 
 /**
  * Default total time from the first transport loss during which the client keeps trying.
- * The platform keeps a dropped session for about 15 s, so retrying longer than 20 s
+ * The platform keeps a dropped session for about 15 s, so retrying longer than 15 s
  * only ends in a 401 and `SESSION_ENDED_DURING_RECONNECT`.
  */
-export const DEFAULT_RECONNECT_BUDGET_MS = 20_000;
+export const DEFAULT_RECONNECT_BUDGET_MS = 15_000;
 /** ICE `disconnected` must last this long before the user sees "interrupted". */
 const ICE_DISCONNECTED_GRACE_MS = 2_000;
 /**
  * Default time an ICE `disconnected` connection gets to come back on its own before
- * the client rejoins. The platform keeps a dropped peer for about 10 s, and a rejoin
- * replaces (destroys) the old peer on the server, so rejoining early can turn a
- * recoverable blip into a lost session.
+ * the client rejoins. The whole recovery (wait, rejoin, ready) has to fit in the
+ * platform's 15 s window, and a rejoin replaces (destroys) the old peer on the
+ * server, so rejoining early can turn a recoverable blip into a lost session.
  */
-export const DEFAULT_REJOIN_AFTER_DISCONNECTED_MS = 8_000;
+export const DEFAULT_REJOIN_AFTER_DISCONNECTED_MS = 5_000;
 /** Time the relay ICE recovery rejoin gets to reach readiness before escalating. */
 const ICE_RECOVERY_SETTLE_MS = 5_000;
 /** Time a same-session reconnect gets to reach readiness before the next attempt. */
-const RECONNECT_SETTLE_MS = 10_000;
+const RECONNECT_SETTLE_MS = 6_000;
 /** Reconnect signaling WebSocket must open within this time. */
-const SIGNALING_CONNECT_TIMEOUT_MS = 5_000;
+const SIGNALING_CONNECT_TIMEOUT_MS = 4_000;
 /** Delay before same-session reconnect attempt 1, 2, 3, then every later attempt. */
-const RECONNECT_BACKOFF_MS = [1_000, 2_000, 4_000, 5_000] as const;
+const RECONNECT_BACKOFF_MS = [1_000, 2_000, 2_000, 2_000] as const;
 
 /** The gateway rejected the reconnect token (HTTP 401): the session no longer exists. */
 class SessionEndedDuringReconnectError extends Error {
@@ -1022,9 +1022,9 @@ export async function connectBrowserVoiceSession(
 
   const startRecovery = (reason: string): void => {
     if (gracefulDisconnect || reconnectPolicy === "new-session") return;
-    if (canIceRecover()) {
-      scheduleIceRecovery(reason);
-    } else if (canAutoReconnectTransport()) {
+    // The first action is the same-session reconnect; the relay ICE recovery
+    // (scheduleIceRecovery) only serves the stuck-checking path on first connect.
+    if (canAutoReconnectTransport()) {
       scheduleAutoReconnect(reason);
     } else {
       emitAutoReconnectExhausted(reason);
@@ -1236,7 +1236,9 @@ export async function connectBrowserVoiceSession(
     stopIceStuckWatch();
     const retriable = canIceRecover() || canAutoReconnectTransport();
     rejectConnectedWait(new Error(`peer connection ${state}`), retriable);
-    if (canIceRecover()) {
+    // A dropped, previously ready session reconnects directly (no relay detour) so it
+    // fits the platform's 15 s window; relay ICE recovery stays for the first connect.
+    if (!hasReachedReadyOnce && canIceRecover()) {
       scheduleIceRecovery(reconnectReason);
     } else if (retriable) {
       scheduleAutoReconnect(reconnectReason);
