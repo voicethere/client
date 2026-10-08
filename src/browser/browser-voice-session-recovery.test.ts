@@ -334,6 +334,49 @@ describe("connectBrowserVoiceSession time-budgeted recovery", () => {
     }
   });
 
+  it("a connection that restores while attempt 1 waits in backoff cancels the attempt", async () => {
+    vi.useFakeTimers();
+    const { session, debugLines } = await connectReady();
+    const wsBefore = MockWebSocket.instances.length;
+    const pcBefore = MockPeerConnection.instances.length;
+    const pc = MockPeerConnection.instances[0]!;
+    const pcClose = vi.spyOn(pc, "close");
+    setIce(pc, "disconnected");
+    await vi.advanceTimersByTimeAsync(5_100);
+    expect(MockWebSocket.instances.length).toBe(wsBefore);
+    setIce(pc, "connected");
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(MockWebSocket.instances.length).toBe(wsBefore);
+    expect(MockPeerConnection.instances.length).toBe(pcBefore);
+    expect(pcClose).not.toHaveBeenCalled();
+    const recovery = session.getConnectionStatus().recovery;
+    expect(recovery?.state).toBe("restored");
+    if (recovery?.state === "restored") {
+      expect(recovery.via).toBe("ice-restart");
+    }
+    expect(debugLines.some((l) => l.includes("reconnect_cancelled"))).toBe(
+      true,
+    );
+  });
+
+  it("after a cancelled attempt, a later outage still reconnects", async () => {
+    vi.useFakeTimers();
+    await connectReady();
+    const wsBefore = MockWebSocket.instances.length;
+    const pc = MockPeerConnection.instances[0]!;
+    setIce(pc, "disconnected");
+    await vi.advanceTimersByTimeAsync(5_100);
+    setIce(pc, "connected");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(MockWebSocket.instances.length).toBe(wsBefore);
+
+    setIce(pc, "disconnected");
+    // 5 s wait + 2 s backoff (the attempt counter is not reset by a cancel).
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(MockWebSocket.instances.length).toBeGreaterThan(wsBefore);
+  });
+
   it("disconnected for 5 s starts a same-session reconnect without a relay step", async () => {
     vi.useFakeTimers();
     const onIceRecovery = vi.fn();

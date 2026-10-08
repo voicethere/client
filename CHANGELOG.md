@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.11.8] - 2026-10-08
+
+### Fixed
+
+- Recovery: when the original connection comes back while a reconnect attempt is still waiting to start, the attempt is cancelled instead of replacing the healthy connection.
+- `onReconnected` now also fires when a relay ICE recovery brings an already-connected session back.
+
 ## [0.11.7] - 2026-10-08
 
 ### Fixed

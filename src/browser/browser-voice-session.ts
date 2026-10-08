@@ -1057,6 +1057,16 @@ export async function connectBrowserVoiceSession(
     outageStartMs = null;
     outageRestoreEligible = false;
     clearRecoveryTimers();
+    // The original connection came back before the queued attempt started: drop it.
+    if (outageRecoveryVia === "ice-restart" && reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+      debug?.info(
+        "session",
+        "reconnect_cancelled",
+        `restored_before_attempt attempt=${autoReconnectAttempts}`,
+      );
+    }
     debug?.info(
       "session",
       "transport_restored",
@@ -1269,6 +1279,9 @@ export async function connectBrowserVoiceSession(
       return;
     }
     iceRecoveryAttempts += 1;
+    // The relay recovery rejoins the same session: report it like any same-session reconnect.
+    lastReconnectAttemptForCallback = iceRecoveryAttempts;
+    awaitingReconnectedCallback = true;
     if (effectiveIceTransportPolicy !== "relay") {
       effectiveIceTransportPolicy = "relay";
     }
