@@ -392,6 +392,73 @@ describe("connectBrowserVoiceSession time-budgeted recovery", () => {
     );
   });
 
+  it("server window 30000 extends the budget to 30 s", async () => {
+    vi.useFakeTimers();
+    const { errors, debugLines } = await connectReady();
+    openedControlChannels[0]!.onmessage?.({
+      data: JSON.stringify({
+        type: "session_reconnect_token",
+        token: "vtrec_x",
+        reconnectWindowMs: 30_000,
+      }),
+    });
+    expect(debugLines).toContain(
+      "session/reconnect_budget reconnect budget 30000ms (from server)",
+    );
+    MockWebSocket.mode = "error";
+    MockPeerConnection.instances[0]!.fail();
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(errors.some((e) => e.code === "WEBRTC_RECONNECT_EXHAUSTED")).toBe(
+      false,
+    );
+    await vi.advanceTimersByTimeAsync(1_200);
+    expect(errors.some((e) => e.code === "WEBRTC_RECONNECT_EXHAUSTED")).toBe(
+      true,
+    );
+  });
+
+  it("explicit reconnectBudgetMs wins over the server window", async () => {
+    vi.useFakeTimers();
+    const { errors } = await connectReady({ reconnectBudgetMs: 10_000 });
+    openedControlChannels[0]!.onmessage?.({
+      data: JSON.stringify({
+        type: "session_reconnect_token",
+        token: "vtrec_x",
+        reconnectWindowMs: 30_000,
+      }),
+    });
+    MockWebSocket.mode = "error";
+    MockPeerConnection.instances[0]!.fail();
+    await vi.advanceTimersByTimeAsync(10_200);
+    expect(errors.some((e) => e.code === "WEBRTC_RECONNECT_EXHAUSTED")).toBe(
+      true,
+    );
+  });
+
+  it("invalid or missing reconnectWindowMs keeps 15 s", async () => {
+    vi.useFakeTimers();
+    const { errors } = await connectReady();
+    for (const reconnectWindowMs of [undefined, "30000", 1_000, 500_000, NaN]) {
+      openedControlChannels[0]!.onmessage?.({
+        data: JSON.stringify({
+          type: "session_reconnect_token",
+          token: "vtrec_x",
+          reconnectWindowMs,
+        }),
+      });
+    }
+    MockWebSocket.mode = "error";
+    MockPeerConnection.instances[0]!.fail();
+    await vi.advanceTimersByTimeAsync(14_900);
+    expect(errors.some((e) => e.code === "WEBRTC_RECONNECT_EXHAUSTED")).toBe(
+      false,
+    );
+    await vi.advanceTimersByTimeAsync(200);
+    expect(errors.some((e) => e.code === "WEBRTC_RECONNECT_EXHAUSTED")).toBe(
+      true,
+    );
+  });
+
   it("gives up after the 15 s budget with WEBRTC_RECONNECT_EXHAUSTED and a lost status", async () => {
     vi.useFakeTimers();
     const { session, errors } = await connectReady();
