@@ -635,6 +635,71 @@ describe("connectBrowserVoiceSession ICE recovery (relay)", () => {
     expect(session.getConnectionStatus().ready).toBe(true);
   });
 
+  it("onReconnected fires after a stuck-checking relay recovery that follows a reconnect", async () => {
+    vi.useFakeTimers();
+
+    const runtime: WebRtcRuntime = {
+      WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
+      RTCPeerConnection:
+        MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+    };
+
+    const onIceRecovery = vi.fn();
+    const onReconnected = vi.fn();
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: false,
+      readiness: "data",
+      runtime,
+      iceTransportPolicy: "all",
+      maxIceRecoveryAttempts: 1,
+      maxAutoReconnectAttempts: 2,
+      iceRecoveryStuckCheckingMs: 2_000,
+      onIceRecovery,
+      onReconnected,
+    });
+
+    sendOffer(MockWebSocket.instances[0]);
+    await Promise.resolve();
+    await Promise.resolve();
+    openDataChannels(MockPeerConnection.instances[0]);
+    await session.waitForConnected(1_000);
+    expect(onReconnected).not.toHaveBeenCalled();
+
+    // PC #1 fails after ready: same-session reconnect attempt 1 creates PC #2,
+    // which never connects (it stays in "new" with no nominated pair).
+    MockPeerConnection.instances[0].fail();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+    const wsAfterReconnect = MockWebSocket.instances.length;
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(MockPeerConnection.instances.length).toBe(2);
+
+    // The stuck watch (2 s here, so it fires before the reconnect settle timer)
+    // sees no nominated pair and starts relay ICE recovery.
+    await vi.advanceTimersByTimeAsync(3_500);
+    await Promise.resolve();
+    expect(onIceRecovery).toHaveBeenCalledTimes(1);
+    expect(onIceRecovery.mock.calls[0]![0]).toBe(1);
+    expect(MockWebSocket.instances.length).toBeGreaterThan(wsAfterReconnect);
+
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await Promise.resolve();
+    await Promise.resolve();
+    const lastPc = MockPeerConnection.instances.at(-1)!;
+    expect(lastPc.config?.iceTransportPolicy).toBe("relay");
+    openDataChannels(lastPc);
+    await session.waitForConnected(10_000);
+
+    // Once: the reconnect that created PC #2 never reached ready, so the flag it
+    // armed is consumed by the relay recovery rejoin (PC #3).
+    expect(onReconnected).toHaveBeenCalledTimes(1);
+    expect(onReconnected.mock.calls[0]![0]).toBe(1);
+  });
+
   it("falls back to onReconnecting after ice recovery is exhausted", async () => {
     vi.useFakeTimers();
 

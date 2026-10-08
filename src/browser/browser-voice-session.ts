@@ -1279,6 +1279,9 @@ export async function connectBrowserVoiceSession(
       return;
     }
     iceRecoveryAttempts += 1;
+    // The relay recovery rejoins the same session: report it like any same-session reconnect.
+    lastReconnectAttemptForCallback = iceRecoveryAttempts;
+    awaitingReconnectedCallback = true;
     if (effectiveIceTransportPolicy !== "relay") {
       effectiveIceTransportPolicy = "relay";
     }
