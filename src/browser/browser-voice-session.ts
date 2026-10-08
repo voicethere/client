@@ -141,6 +141,13 @@ export const DEFAULT_REJOIN_AFTER_DISCONNECTED_MS = 5_000;
 const ICE_RECOVERY_SETTLE_MS = 5_000;
 /** Time a same-session reconnect gets to reach readiness before the next attempt. */
 const RECONNECT_SETTLE_MS = 6_000;
+/** One-time extra settle time for an attempt whose replacement peer is still connecting. */
+const RECONNECT_SETTLE_EXTEND_MS = 3_000;
+/**
+ * Extra time an attempt that is in flight when the budget ends gets to connect.
+ * No new attempt starts during it.
+ */
+export const RECONNECT_INFLIGHT_GRACE_MS = 4_000;
 /** Reconnect signaling WebSocket must open within this time. */
 const SIGNALING_CONNECT_TIMEOUT_MS = 4_000;
 /** Delay before same-session reconnect attempt 1, 2, 3, then every later attempt. */
@@ -633,6 +640,10 @@ export async function connectBrowserVoiceSession(
   let budgetTimer: ReturnType<typeof setTimeout> | undefined;
   let iceDisconnectedTimer: ReturnType<typeof setTimeout> | undefined;
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Socket of the current reconnect attempt once it joined (cleared when the next attempt is scheduled). */
+  let reconnectJoinedWs: WebSocket | null = null;
+  /** True while an in-flight attempt runs on after the budget ended. */
+  let inflightGraceActive = false;
   let awaitingReconnectedCallback = false;
   let lastReconnectAttemptForCallback = 0;
   let lastReconnectReason: string | undefined;
@@ -871,6 +882,37 @@ export async function connectBrowserVoiceSession(
     budgetTimer = undefined;
     iceDisconnectedTimer = undefined;
     settleTimer = undefined;
+    inflightGraceActive = false;
+  };
+
+  /** The replacement peer connection of a same-session reconnect is still negotiating ICE. */
+  const isReplacementPcConnecting = (): boolean => {
+    if (outageRecoveryVia !== "reconnect") return false;
+    const ice = connectionSnapshot.iceConnectionState;
+    const state = connectionSnapshot.peerConnectionState;
+    if (
+      ice === "failed" ||
+      ice === "closed" ||
+      state === "failed" ||
+      state === "closed"
+    ) {
+      return false;
+    }
+    return ice === "checking" || state === "connecting";
+  };
+
+  /** A reconnect attempt has its signaling socket connecting/open or its peer connecting. */
+  const isReconnectAttemptInFlight = (): boolean => {
+    if (outageRecoveryVia !== "reconnect") return false;
+    if (reconnectFlight !== null) return true;
+    if (
+      reconnectJoinedWs !== null &&
+      reconnectJoinedWs === ws &&
+      ws.readyState <= 1
+    ) {
+      return true;
+    }
+    return isReplacementPcConnecting();
   };
 
   /** Terminal recovery failure: stop retrying, tell the integrator, publish `lost`. */
@@ -960,6 +1002,23 @@ export async function connectBrowserVoiceSession(
     );
     budgetTimer = setTimeout(() => {
       budgetTimer = undefined;
+      if (isReconnectAttemptInFlight()) {
+        // Let the attempt that is about to connect finish; never start another one.
+        inflightGraceActive = true;
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = undefined;
+        debug?.warn(
+          "session",
+          "reconnect_inflight_grace",
+          `attempt=${autoReconnectAttempts} grace_ms=${RECONNECT_INFLIGHT_GRACE_MS}`,
+        );
+        budgetTimer = setTimeout(() => {
+          budgetTimer = undefined;
+          inflightGraceActive = false;
+          emitAutoReconnectExhausted("budget_exhausted");
+        }, RECONNECT_INFLIGHT_GRACE_MS);
+        return;
+      }
       emitAutoReconnectExhausted("budget_exhausted");
     }, remainingMs);
     debug?.warn("session", "transport_lost", reason);
@@ -1002,12 +1061,32 @@ export async function connectBrowserVoiceSession(
   };
 
   /** Escalate when a recovery rejoin does not reach readiness in time. */
-  const armSettleTimer = (ms: number, reason: string): void => {
+  const armSettleTimer = (
+    ms: number,
+    reason: string,
+    canExtend = true,
+  ): void => {
     if (outageStartMs === null || gracefulDisconnect) return;
     if (settleTimer) clearTimeout(settleTimer);
     settleTimer = setTimeout(() => {
       settleTimer = undefined;
       if (outageStartMs === null || gracefulDisconnect) return;
+      if (canExtend && !inflightGraceActive && isReplacementPcConnecting()) {
+        const budgetLeftMs = outageStartMs + reconnectBudgetMs - Date.now();
+        if (budgetLeftMs > 0) {
+          debug?.info(
+            "session",
+            "reconnect_settle_extended",
+            `reconnect attempt ${autoReconnectAttempts} still connecting — extending settle`,
+          );
+          armSettleTimer(
+            Math.min(RECONNECT_SETTLE_EXTEND_MS, budgetLeftMs),
+            reason,
+            false,
+          );
+          return;
+        }
+      }
       debug?.warn("session", "recovery_settle_timeout", reason);
       scheduleAutoReconnect(`${reason}_timeout`);
     }, ms);
@@ -1848,6 +1927,9 @@ export async function connectBrowserVoiceSession(
 
   const scheduleAutoReconnect = (reason: string): void => {
     if (gracefulDisconnect || reconnectPolicy === "new-session") return;
+    // The budget ended while an attempt was connecting: that attempt gets the grace.
+    if (inflightGraceActive) return;
+    reconnectJoinedWs = null;
     clearIceDisconnectedTimer();
     beginOutage(reason, Date.now(), false);
     if (autoReconnectAttempts >= maxAutoReconnectAttemptsLimit()) {
@@ -2129,6 +2211,7 @@ export async function connectBrowserVoiceSession(
         debug?.info("signaling", "join_sent", `room=${roomId} peer=${peerId}`);
         debug?.info("signaling", isReconnect ? "rejoined" : "joined", roomId);
         updateConnectionSnapshot({ signalingJoined: true });
+        if (isReconnect) reconnectJoinedWs = nextWs;
         resolve();
       };
       nextWs.onerror = () => {
