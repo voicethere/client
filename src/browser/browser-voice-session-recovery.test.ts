@@ -145,6 +145,22 @@ class MockPeerConnection {
     this.onconnectionstatechange?.();
   }
 
+  /** Candidate-pair states returned by getStats; null = getStats has no pairs. */
+  pairStates: RTCStatsIceCandidatePairState[] | null = null;
+
+  async getStats(): Promise<RTCStatsReport> {
+    const map = new Map<string, Record<string, unknown>>();
+    (this.pairStates ?? []).forEach((state, i) => {
+      map.set(`pair-${i}`, {
+        id: `pair-${i}`,
+        type: "candidate-pair",
+        state,
+        nominated: false,
+      });
+    });
+    return map as unknown as RTCStatsReport;
+  }
+
   fail(): void {
     this.connectionState = "failed";
     this.onconnectionstatechange?.();
@@ -470,6 +486,75 @@ describe("connectBrowserVoiceSession time-budgeted recovery", () => {
       state: "lost",
       reason: "WEBRTC_RECONNECT_EXHAUSTED",
     });
+  });
+
+  const ICE_FAILED_LINE = "session/reconnect_attempt_ice_failed";
+
+  it("an attempt whose candidate pairs all failed starts the next attempt without waiting for settle", async () => {
+    vi.useFakeTimers();
+    const { session, replacement, errors, debugLines } =
+      await startCheckingAttempt();
+    const wsCount = MockWebSocket.instances.length;
+    replacement.pairStates = ["failed", "failed", "failed"];
+    await vi.advanceTimersByTimeAsync(2_100);
+    const line = debugLines.find((l) => l.includes(ICE_FAILED_LINE));
+    expect(line).toBeDefined();
+    expect(line).toContain("pairs=3");
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(MockWebSocket.instances.length).toBeGreaterThan(wsCount);
+    await completeReconnect();
+    expect(session.getConnectionStatus().recovery?.state).toBe("restored");
+    expect(exhausted(errors)).toBe(false);
+  });
+
+  it("one probe with all pairs failed does not abandon the attempt", async () => {
+    vi.useFakeTimers();
+    const { replacement, debugLines } = await startCheckingAttempt();
+    const wsCount = MockWebSocket.instances.length;
+    replacement.pairStates = ["failed", "failed"];
+    await vi.advanceTimersByTimeAsync(1_050);
+    replacement.pairStates = ["failed", "in-progress"];
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(debugLines.some((l) => l.includes(ICE_FAILED_LINE))).toBe(false);
+    expect(MockWebSocket.instances.length).toBe(wsCount);
+  });
+
+  it("pairs still in progress keep the attempt until settle", async () => {
+    vi.useFakeTimers();
+    const { replacement, debugLines } = await startCheckingAttempt();
+    const wsCount = MockWebSocket.instances.length;
+    replacement.pairStates = ["in-progress", "waiting"];
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(debugLines.some((l) => l.includes(ICE_FAILED_LINE))).toBe(false);
+    expect(MockWebSocket.instances.length).toBe(wsCount);
+  });
+
+  it("a dead attempt during the grace ends recovery at once", async () => {
+    vi.useFakeTimers();
+    const { replacement, errors } = await startCheckingAttempt({
+      reconnectBudgetMs: 5_000,
+    });
+    await vi.advanceTimersByTimeAsync(4_000);
+    const wsCount = MockWebSocket.instances.length;
+    replacement.pairStates = ["failed", "failed"];
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(exhausted(errors)).toBe(true);
+    expect(MockWebSocket.instances.length).toBe(wsCount);
+  });
+
+  it("a dead attempt at budget end: ice_failed is logged and recovery ends by the grace end", async () => {
+    vi.useFakeTimers();
+    const { replacement, errors, debugLines } = await startCheckingAttempt({
+      reconnectBudgetMs: 5_000,
+    });
+    replacement.pairStates = ["failed", "failed"];
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(debugLines.some((l) => l.includes(ICE_FAILED_LINE))).toBe(true);
+    // Attempt 2 is in its 2 s backoff when the 5 s budget ends, so the stale
+    // peer connection still counts as in flight and the grace (5 s to 9 s) runs.
+    expect(exhausted(errors)).toBe(false);
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(exhausted(errors)).toBe(true);
   });
 
   it("server window 30000 extends the budget to 30 s", async () => {
