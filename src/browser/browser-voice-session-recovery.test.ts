@@ -392,6 +392,86 @@ describe("connectBrowserVoiceSession time-budgeted recovery", () => {
     );
   });
 
+  /** Start attempt 1, deliver its offer and leave the replacement peer in ICE `checking`. */
+  async function startCheckingAttempt(
+    extra: Partial<Parameters<typeof connectBrowserVoiceSession>[0]> = {},
+  ) {
+    const ready = await connectReady(extra);
+    MockPeerConnection.instances[0]!.fail();
+    await vi.advanceTimersByTimeAsync(1_100);
+    sendOffer(MockWebSocket.instances.at(-1)!);
+    await flush();
+    const replacement = MockPeerConnection.instances.at(-1)!;
+    setIce(replacement, "checking");
+    return { ...ready, replacement };
+  }
+
+  const exhausted = (errors: SessionErrorEvent[]): boolean =>
+    errors.some((e) => e.code === "WEBRTC_RECONNECT_EXHAUSTED");
+
+  it("an attempt still checking when its settle timer fires gets extended and can connect", async () => {
+    vi.useFakeTimers();
+    const { session, replacement, debugLines } = await startCheckingAttempt();
+    const wsCount = MockWebSocket.instances.length;
+    // Attempt 1 settle timer fires ~6 s after it joined (t ~ 7.1 s).
+    await vi.advanceTimersByTimeAsync(6_500);
+    expect(
+      debugLines.some((l) => l.includes("still connecting — extending settle")),
+    ).toBe(true);
+    expect(MockWebSocket.instances.length).toBe(wsCount);
+    await vi.advanceTimersByTimeAsync(1_000);
+    openDataChannels(replacement);
+    await flush();
+    expect(session.getConnectionStatus().recovery?.state).toBe("restored");
+    expect(MockWebSocket.instances.length).toBe(wsCount);
+  });
+
+  it("an attempt in flight at budget end gets the grace and restores", async () => {
+    vi.useFakeTimers();
+    const { session, replacement, errors } = await startCheckingAttempt({
+      reconnectBudgetMs: 5_000,
+    });
+    // startCheckingAttempt leaves the clock at ~1.1 s; the 5 s budget ends at 5 s.
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(exhausted(errors)).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(exhausted(errors)).toBe(false);
+    openDataChannels(replacement);
+    await flush();
+    expect(session.getConnectionStatus().recovery?.state).toBe("restored");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(exhausted(errors)).toBe(false);
+  });
+
+  it("no new attempt starts during the grace", async () => {
+    vi.useFakeTimers();
+    const { errors } = await startCheckingAttempt({ reconnectBudgetMs: 5_000 });
+    await vi.advanceTimersByTimeAsync(4_000);
+    const wsCount = MockWebSocket.instances.length;
+    const pcCount = MockPeerConnection.instances.length;
+    // Covers the attempt 1 settle timer (t ~ 7.1 s) firing inside the grace.
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(exhausted(errors)).toBe(false);
+    expect(MockWebSocket.instances.length).toBe(wsCount);
+    expect(MockPeerConnection.instances.length).toBe(pcCount);
+  });
+
+  it("grace ends without connect -> WEBRTC_RECONNECT_EXHAUSTED", async () => {
+    vi.useFakeTimers();
+    const { session, errors } = await startCheckingAttempt({
+      reconnectBudgetMs: 5_000,
+    });
+    // Grace runs from the 5 s budget end to 9 s.
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(exhausted(errors)).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(exhausted(errors)).toBe(true);
+    expect(session.getConnectionStatus().recovery).toMatchObject({
+      state: "lost",
+      reason: "WEBRTC_RECONNECT_EXHAUSTED",
+    });
+  });
+
   it("server window 30000 extends the budget to 30 s", async () => {
     vi.useFakeTimers();
     const { errors, debugLines } = await connectReady();

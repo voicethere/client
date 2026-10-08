@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.11.6] - 2026-10-08
+
+### Fixed
+
+- A reconnect attempt that is still connecting when its wait or the budget runs out gets a few more seconds instead of being dropped.
+
 ## [0.11.5] - 2026-10-08
 
 ### Added
