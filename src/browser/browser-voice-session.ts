@@ -1057,6 +1057,16 @@ export async function connectBrowserVoiceSession(
     outageStartMs = null;
     outageRestoreEligible = false;
     clearRecoveryTimers();
+    // The original connection came back before the queued attempt started: drop it.
+    if (outageRecoveryVia === "ice-restart" && reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+      debug?.info(
+        "session",
+        "reconnect_cancelled",
+        `restored_before_attempt attempt=${autoReconnectAttempts}`,
+      );
+    }
     debug?.info(
       "session",
       "transport_restored",
