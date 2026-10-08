@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-10-08
+
+### Fixed
+
+- A connection that is only briefly interrupted is no longer replaced; recovery waits up to 8 s (`rejoinAfterDisconnectedMs`) for it to come back before reconnecting.
+
 ## [0.11.2] - 2026-10-08
 
 ### Fixed

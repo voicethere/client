@@ -256,12 +256,12 @@ describe("connectBrowserVoiceSession time-budgeted recovery", () => {
     openedControlChannels.length = 0;
   });
 
-  it("a 5 s transport outage restores the session without a new session", async () => {
+  it("an 8 s transport outage restores the session without a new session", async () => {
     vi.useFakeTimers();
     const { session, statuses, errors } = await connectReady();
 
     setIce(MockPeerConnection.instances[0]!, "disconnected");
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(8_000);
     await completeReconnect();
 
     const states = statuses.flatMap((s) =>
@@ -271,8 +271,8 @@ describe("connectBrowserVoiceSession time-budgeted recovery", () => {
     const last = session.getConnectionStatus().recovery;
     expect(last?.state).toBe("restored");
     if (last?.state === "restored") {
-      expect(last.downtimeMs).toBeGreaterThanOrEqual(5_000);
-      expect(last.downtimeMs).toBeLessThan(5_200);
+      expect(last.downtimeMs).toBeGreaterThanOrEqual(8_000);
+      expect(last.downtimeMs).toBeLessThan(8_200);
       expect(last.message).toBe("Reconnected.");
     }
     expect(errors.some((e) => e.code === "WEBRTC_RECONNECT_EXHAUSTED")).toBe(
@@ -294,14 +294,51 @@ describe("connectBrowserVoiceSession time-budgeted recovery", () => {
     expect(MockWebSocket.instances.length).toBeGreaterThan(before);
   });
 
-  it("recovery starts within 3 s of ICE disconnected lasting 2 s", async () => {
+  it("a 6 s ICE disconnect recovers without a rejoin", async () => {
+    vi.useFakeTimers();
+    const { session, statuses } = await connectReady();
+    const wsBefore = MockWebSocket.instances.length;
+    const pcBefore = MockPeerConnection.instances.length;
+    const pc = MockPeerConnection.instances[0]!;
+    setIce(pc, "disconnected");
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(statuses.some((s) => s.recovery?.state === "interrupted")).toBe(
+      true,
+    );
+    setIce(pc, "connected");
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(MockWebSocket.instances.length).toBe(wsBefore);
+    expect(MockPeerConnection.instances.length).toBe(pcBefore);
+    const recovery = session.getConnectionStatus().recovery;
+    expect(recovery?.state).toBe("restored");
+    if (recovery?.state === "restored") {
+      expect(recovery.via).toBe("ice-restart");
+      expect(recovery.downtimeMs).toBeGreaterThanOrEqual(6_000);
+    }
+  });
+
+  it("disconnected for 8 s starts the rejoin", async () => {
     vi.useFakeTimers();
     await connectReady();
     const before = MockWebSocket.instances.length;
     setIce(MockPeerConnection.instances[0]!, "disconnected");
-    await vi.advanceTimersByTimeAsync(1_900);
+    await vi.advanceTimersByTimeAsync(7_900);
     expect(MockWebSocket.instances.length).toBe(before);
-    await vi.advanceTimersByTimeAsync(1_100);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(MockWebSocket.instances.length).toBeGreaterThan(before);
+  });
+
+  it("failed starts the rejoin immediately", async () => {
+    vi.useFakeTimers();
+    await connectReady();
+    const before = MockWebSocket.instances.length;
+    const pc = MockPeerConnection.instances[0]!;
+    setIce(pc, "disconnected");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(MockWebSocket.instances.length).toBe(before);
+    pc.fail();
+    await vi.advanceTimersByTimeAsync(100);
     expect(MockWebSocket.instances.length).toBeGreaterThan(before);
   });
 
@@ -419,7 +456,7 @@ describe("recovery keeps the old peer connection until it is replaced", () => {
     const wsBefore = MockWebSocket.instances.length;
 
     setIce(oldPc, "disconnected");
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(9_000);
     expect(MockWebSocket.instances.length).toBeGreaterThan(wsBefore);
 
     // Replacement offer arrives and a new PC exists, but it is not connected yet.
@@ -438,7 +475,7 @@ describe("recovery keeps the old peer connection until it is replaced", () => {
     const pcClose = vi.spyOn(oldPc, "close");
 
     setIce(oldPc, "disconnected");
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(9_000);
     await completeReconnect();
 
     expect(MockPeerConnection.instances.length).toBe(2);
