@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.11.7] - 2026-10-08
+
+### Fixed
+
+- A reconnect attempt whose ICE checks all failed (for example because it started while the network was still coming back) is replaced by a new attempt right away, instead of waiting out its settle time with no chance to connect.
+
 ## [0.11.6] - 2026-10-08
 
 ### Fixed

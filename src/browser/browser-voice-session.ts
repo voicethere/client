@@ -143,6 +143,10 @@ const ICE_RECOVERY_SETTLE_MS = 5_000;
 const RECONNECT_SETTLE_MS = 6_000;
 /** One-time extra settle time for an attempt whose replacement peer is still connecting. */
 const RECONNECT_SETTLE_EXTEND_MS = 3_000;
+/** How often a reconnect attempt's candidate pairs are checked while it settles. */
+const RECONNECT_DEAD_PAIRS_PROBE_MS = 1_000;
+/** Consecutive probes with every candidate pair failed before the attempt counts as dead. */
+const RECONNECT_DEAD_PAIRS_CONFIRM = 2;
 /**
  * Extra time an attempt that is in flight when the budget ends gets to connect.
  * No new attempt starts during it.
@@ -640,6 +644,9 @@ export async function connectBrowserVoiceSession(
   let budgetTimer: ReturnType<typeof setTimeout> | undefined;
   let iceDisconnectedTimer: ReturnType<typeof setTimeout> | undefined;
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
+  let deadPairsTimer: ReturnType<typeof setInterval> | undefined;
+  /** The current reconnect attempt's candidate pairs have all failed; it cannot connect. */
+  let replacementIceDead = false;
   /** Socket of the current reconnect attempt once it joined (cleared when the next attempt is scheduled). */
   let reconnectJoinedWs: WebSocket | null = null;
   /** True while an in-flight attempt runs on after the budget ended. */
@@ -875,7 +882,14 @@ export async function connectBrowserVoiceSession(
     options.onControlMessage?.(message);
   };
 
+  const stopDeadPairsProbe = (): void => {
+    if (deadPairsTimer) clearInterval(deadPairsTimer);
+    deadPairsTimer = undefined;
+  };
+
   const clearRecoveryTimers = (): void => {
+    stopDeadPairsProbe();
+    replacementIceDead = false;
     if (budgetTimer) clearTimeout(budgetTimer);
     if (iceDisconnectedTimer) clearTimeout(iceDisconnectedTimer);
     if (settleTimer) clearTimeout(settleTimer);
@@ -888,6 +902,7 @@ export async function connectBrowserVoiceSession(
   /** The replacement peer connection of a same-session reconnect is still negotiating ICE. */
   const isReplacementPcConnecting = (): boolean => {
     if (outageRecoveryVia !== "reconnect") return false;
+    if (replacementIceDead) return false;
     const ice = connectionSnapshot.iceConnectionState;
     const state = connectionSnapshot.peerConnectionState;
     if (
@@ -1060,6 +1075,81 @@ export async function connectBrowserVoiceSession(
     iceDisconnectedTimer = undefined;
   };
 
+  /**
+   * While a reconnect attempt settles, watch its candidate pairs. When every pair
+   * has failed (twice in a row) the attempt cannot connect: replace it right away.
+   */
+  const startDeadPairsProbe = (): void => {
+    stopDeadPairsProbe();
+    // The rejoin socket opens before the server offer creates the replacement
+    // peer connection, so at arm time `pc` is still the pre-attempt one.
+    const startPc = pc;
+    let targetPc: RTCPeerConnection | null = null;
+    let deadCount = 0;
+    let probing = false;
+    const shouldStop = (): boolean =>
+      gracefulDisconnect ||
+      outageStartMs === null ||
+      outageRecoveryVia !== "reconnect";
+    const probe = async (): Promise<void> => {
+      if (probing) return;
+      probing = true;
+      try {
+        if (shouldStop()) {
+          stopDeadPairsProbe();
+          return;
+        }
+        const current = pc;
+        // Replacement not created yet (or being swapped): nothing to judge.
+        if (!current || current === startPc) return;
+        if (current !== targetPc) {
+          targetPc = current;
+          deadCount = 0;
+        }
+        let diagnostics: WebRtcDiagnostics | null = null;
+        try {
+          diagnostics = await collectWebRtcDiagnostics(
+            current,
+            buildWebRtcConnectionStatus(connectionSnapshot, readinessProfile),
+          );
+        } catch {
+          return;
+        }
+        if (shouldStop()) {
+          stopDeadPairsProbe();
+          return;
+        }
+        if (pc !== current) return;
+        const s = diagnostics?.stats;
+        if (s && s.candidatePairs > 0 && s.failedPairs === s.candidatePairs) {
+          deadCount += 1;
+        } else {
+          deadCount = 0;
+        }
+        if (!s || deadCount < RECONNECT_DEAD_PAIRS_CONFIRM) return;
+        stopDeadPairsProbe();
+        replacementIceDead = true;
+        debug?.warn(
+          "session",
+          "reconnect_attempt_ice_failed",
+          `attempt=${autoReconnectAttempts} pairs=${s.candidatePairs}`,
+        );
+        if (inflightGraceActive) {
+          emitAutoReconnectExhausted("reconnect_ice_failed");
+          return;
+        }
+        if (settleTimer) clearTimeout(settleTimer);
+        settleTimer = undefined;
+        scheduleAutoReconnect("reconnect_ice_failed");
+      } finally {
+        probing = false;
+      }
+    };
+    deadPairsTimer = setInterval(() => {
+      void probe();
+    }, RECONNECT_DEAD_PAIRS_PROBE_MS);
+  };
+
   /** Escalate when a recovery rejoin does not reach readiness in time. */
   const armSettleTimer = (
     ms: number,
@@ -1090,6 +1180,7 @@ export async function connectBrowserVoiceSession(
       debug?.warn("session", "recovery_settle_timeout", reason);
       scheduleAutoReconnect(`${reason}_timeout`);
     }, ms);
+    if (reason === "reconnect" && canExtend) startDeadPairsProbe();
   };
 
   /** ICE/PC `disconnected`: start recovery if it lasts longer than the grace period. */
@@ -1929,6 +2020,7 @@ export async function connectBrowserVoiceSession(
     if (gracefulDisconnect || reconnectPolicy === "new-session") return;
     // The budget ended while an attempt was connecting: that attempt gets the grace.
     if (inflightGraceActive) return;
+    stopDeadPairsProbe();
     reconnectJoinedWs = null;
     clearIceDisconnectedTimer();
     beginOutage(reason, Date.now(), false);
@@ -1949,6 +2041,7 @@ export async function connectBrowserVoiceSession(
     if (settleTimer) clearTimeout(settleTimer);
     settleTimer = undefined;
     reconnectTimer = setTimeout(() => {
+      replacementIceDead = false;
       outageRecoveryVia = "reconnect";
       void reconnectSignaling(true)
         .then(() => armSettleTimer(RECONNECT_SETTLE_MS, "reconnect"))
