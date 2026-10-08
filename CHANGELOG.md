@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-10-08
+
+### Added
+
+- The reconnect budget follows the project's reconnect window sent by the server; `reconnectBudgetMs` still overrides it.
+
 ## [0.11.4] - 2026-10-08
 
 ### Changed

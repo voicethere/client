@@ -595,7 +595,8 @@ export async function connectBrowserVoiceSession(
     }
   };
   const reconnectPolicy = options.reconnectPolicy ?? "same-session";
-  const reconnectBudgetMs =
+  /** Explicit `reconnectBudgetMs` wins; otherwise the server's reconnect window may replace the default. */
+  let reconnectBudgetMs =
     options.reconnectBudgetMs ?? DEFAULT_RECONNECT_BUDGET_MS;
   const rejoinAfterDisconnectedMs =
     options.rejoinAfterDisconnectedMs ?? DEFAULT_REJOIN_AFTER_DISCONNECTED_MS;
@@ -806,6 +807,22 @@ export async function connectBrowserVoiceSession(
       }
       signalingUrl = rebuildSignalingUrl();
       debug?.info("session", "reconnect_token_updated");
+      const windowMs = message.reconnectWindowMs;
+      if (
+        options.reconnectBudgetMs === undefined &&
+        typeof windowMs === "number" &&
+        Number.isFinite(windowMs) &&
+        windowMs >= 5_000 &&
+        windowMs <= 120_000 &&
+        windowMs !== reconnectBudgetMs
+      ) {
+        reconnectBudgetMs = windowMs;
+        debug?.info(
+          "session",
+          "reconnect_budget",
+          `reconnect budget ${windowMs}ms (from server)`,
+        );
+      }
       options.onControlMessage?.(message);
       return;
     }
