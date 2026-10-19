@@ -35,6 +35,7 @@
     "test:ci": "npm run typecheck && npm run test && npm run build",
     "demo:local": "tsx examples/local-connect.ts",
     "demo:cloud": "tsx examples/cloud-connect.ts",
+    "bench:latency": "tsx examples/latency-bench/src/run.ts",
     "demo:browser": "vite --config examples/browser-test/vite.config.ts"
   },
   "repository": {
