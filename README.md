@@ -75,6 +75,10 @@ npm run demo:browser
 
 See [`examples/browser-test/README.md`](examples/browser-test/README.md).
 
+## Latency benchmark
+
+[`examples/latency-bench`](examples/latency-bench/README.md) runs counting-echo turns against your own deployed agent and writes per-turn end-to-end latency in the node-webrtc-rust benchmark format.
+
 ## Ending a session
 
 | Action                | API                                                                               | Server `end_reason`   |
