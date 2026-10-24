@@ -241,6 +241,7 @@ export async function pollSessionStatus(input: {
           mode: status.credentials.mode ?? ProvisionedRunnerModeType.Voice,
         },
         jobId: input.jobId,
+        buildId: status.build_id ?? null,
       };
     }
 

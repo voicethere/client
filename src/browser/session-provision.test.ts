@@ -14,6 +14,8 @@ import {
   isTerminalSessionJobStatus,
   resolvePostSessions429FailureCode,
   startSession,
+  CustomerContextTooLargeError,
+  MAX_CUSTOMER_CONTEXT_BYTES,
   type SessionStatusResponse,
 } from "./session-provision.js";
 
@@ -493,5 +495,121 @@ describe("startSession adaptive polling", () => {
 
     expect(result.ok).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("startSession customerContext and buildId", () => {
+  const credentials = {
+    session_id: "job-1",
+    mode: "voice",
+    join_token: "token",
+    signaling_url: "wss://sig.example/ws",
+    room_id: "room-1",
+    ice_servers: [],
+    expires_at: "2026-07-01T11:00:00.000Z",
+  };
+  const baseOptions = {
+    apiBase: "https://sessions.example/v1",
+    projectId: PROJECT_ID,
+    pollIntervalMs: 1,
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function stubFetch(statusBuildId: string | null | undefined) {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 202,
+        ok: true,
+        json: async () => ({ session_id: "job-1" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => {
+          const status = baseStatus({ status: "ready", credentials });
+          if (statusBuildId === undefined) {
+            delete (status as Partial<SessionStatusResponse>).build_id;
+          } else {
+            status.build_id = statusBuildId;
+          }
+          return status;
+        },
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  function postedBody(fetchMock: ReturnType<typeof vi.fn>) {
+    return JSON.parse(fetchMock.mock.calls[0][1].body as string);
+  }
+
+  it("sends customer_context in the start body when given", async () => {
+    const fetchMock = stubFetch("build-7");
+    const result = await startSession({
+      ...baseOptions,
+      customerContext: { plan: "beta", n: 1 },
+    });
+    expect(postedBody(fetchMock).customer_context).toEqual({
+      plan: "beta",
+      n: 1,
+    });
+    expect(result.ok && result.buildId).toBe("build-7");
+  });
+
+  it("omits customer_context when not given", async () => {
+    const fetchMock = stubFetch("build-7");
+    await startSession(baseOptions);
+    expect("customer_context" in postedBody(fetchMock)).toBe(false);
+  });
+
+  it("reports buildId null when the server does not send build_id", async () => {
+    stubFetch(undefined);
+    const result = await startSession(baseOptions);
+    expect(result.ok && result.buildId).toBeNull();
+  });
+
+  it("reads buildId from a synchronous 200 response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        json: async () => ({ ...credentials, build_id: "build-9" }),
+      }),
+    );
+    const result = await startSession({ ...baseOptions, async: false });
+    expect(result.ok && result.buildId).toBe("build-9");
+  });
+
+  it("throws customer_context_too_large before any request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const overhead = JSON.stringify({ k: "" }).length;
+    const tooBig = { k: "x".repeat(MAX_CUSTOMER_CONTEXT_BYTES - overhead + 1) };
+    expect(new TextEncoder().encode(JSON.stringify(tooBig)).length).toBe(4097);
+    const error = await startSession({
+      ...baseOptions,
+      customerContext: tooBig,
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CustomerContextTooLargeError);
+    expect((error as CustomerContextTooLargeError).code).toBe(
+      "customer_context_too_large",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a context of exactly the limit", async () => {
+    stubFetch("b");
+    const overhead = JSON.stringify({ k: "" }).length;
+    const exact = { k: "x".repeat(MAX_CUSTOMER_CONTEXT_BYTES - overhead) };
+    const result = await startSession({
+      ...baseOptions,
+      customerContext: exact,
+    });
+    expect(result.ok).toBe(true);
   });
 });

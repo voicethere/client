@@ -153,10 +153,14 @@ const provision = await startSession({
   apiBase: "https://sessions.example/v1",
   projectId,
   headers: { Authorization: `Bearer ${apiKey}` },
+  // Optional. Sent when the session starts (so a canary deployment can route on
+  // one of its fields) and again after connect. At most 4096 bytes as JSON.
+  customerContext: { userId: "u_123" },
   onSessionError: (event) => console.error(event.code, event.message),
 });
 
 if (provision.ok) {
+  console.log(provision.buildId); // build the session runs on, or null
   await connectBrowserSession({
     mode: "voice",
     credentials: provision.credentials,
