@@ -238,6 +238,41 @@ describe("connectBrowserVoiceSession offer handler", () => {
     );
   });
 
+  it("still sends customerContext in session_hello when the control channel opens", async () => {
+    await connectBrowserVoiceSession({
+      credentials: baseCredentials,
+      requestMic: false,
+      readiness: "data",
+      runtime: mockRuntime(),
+      reconnectPolicy: "new-session",
+      customerContext: { plan: "beta" },
+    });
+
+    const ws = MockWebSocket.instances[0];
+    ws.onmessage?.({
+      data: JSON.stringify({
+        type: "offer",
+        peerId: VOICE_AGENT_SERVER_PEER_ID,
+        sdp: { type: "offer", sdp: "v=0\r\na=ice-ufrag:server\r\n" },
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const sent: string[] = [];
+    const channel = {
+      label: "voice-control",
+      readyState: "connecting",
+      send: (data: string) => sent.push(data),
+    } as unknown as RTCDataChannel;
+    const pc = MockPeerConnection.instances[0];
+    pc.ondatachannel?.({ channel } as RTCDataChannelEvent);
+    channel.onopen?.(new Event("open"));
+
+    expect(sent.map((frame) => JSON.parse(frame))).toEqual([
+      { type: "session_hello", customer_context: { plan: "beta" } },
+    ]);
+  });
+
   it("schedules same-session reconnect after offer missing ice-ufrag", async () => {
     const sessionErrors: SessionErrorEvent[] = [];
     const reconnecting: number[] = [];

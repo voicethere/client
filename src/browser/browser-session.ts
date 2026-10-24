@@ -129,7 +129,11 @@ export {
   type BrowserVoiceSession,
   type BrowserVoiceSessionOptions,
 } from "./browser-voice-session.js";
-export { startSession } from "./session-provision.js";
+export {
+  CustomerContextTooLargeError,
+  MAX_CUSTOMER_CONTEXT_BYTES,
+  startSession,
+} from "./session-provision.js";
 export {
   DEFAULT_SESSION_API_RETRY_DELAYS_MS,
   fetchSessionApi,

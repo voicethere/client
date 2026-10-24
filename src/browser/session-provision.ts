@@ -66,6 +66,13 @@ export type StartSessionOptions = {
   apiBase: string;
   projectId: string;
   buildId?: string;
+  /**
+   * Free-form object describing the caller. Sent when the session starts so a
+   * project can route sessions by one of its fields during a canary
+   * deployment (it is also sent in `session_hello` after connect). Must be a
+   * plain object of at most {@link MAX_CUSTOMER_CONTEXT_BYTES} bytes as JSON.
+   */
+  customerContext?: Record<string, unknown>;
   async?: boolean;
   /**
    * When true (default), poll GET /v1/sessions/:id while waiting — each poll
@@ -88,7 +95,13 @@ export type StartSessionOptions = {
 };
 
 export type StartSessionResult =
-  | { ok: true; credentials: SessionCredentials; jobId: string }
+  | {
+      ok: true;
+      credentials: SessionCredentials;
+      jobId: string;
+      /** Build the session runs on; `null` when the server does not report it. */
+      buildId: string | null;
+    }
   | {
       ok: false;
       code: SessionFailureCode | "TIMEOUT" | "HTTP_ERROR";
@@ -96,6 +109,33 @@ export type StartSessionResult =
       /** HTTP status of the POST /sessions response when it was rejected. */
       httpStatus?: number;
     };
+
+/** Largest `customerContext` accepted (UTF-8 bytes of its JSON form). */
+export const MAX_CUSTOMER_CONTEXT_BYTES = 4096;
+
+/** Thrown by `startSession` before any request when `customerContext` is invalid or too large. */
+export class CustomerContextTooLargeError extends Error {
+  readonly code = "customer_context_too_large" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "CustomerContextTooLargeError";
+  }
+}
+
+function assertCustomerContext(value: unknown): void {
+  if (value === undefined) return;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new CustomerContextTooLargeError(
+      "customerContext must be a plain object",
+    );
+  }
+  const bytes = new TextEncoder().encode(JSON.stringify(value)).length;
+  if (bytes > MAX_CUSTOMER_CONTEXT_BYTES) {
+    throw new CustomerContextTooLargeError(
+      `customerContext is ${bytes} bytes; the limit is ${MAX_CUSTOMER_CONTEXT_BYTES}`,
+    );
+  }
+}
 
 export function isTerminalSessionJobStatus(status: SessionJobStatus): boolean {
   return status === "ready" || status === "failed";
@@ -169,6 +209,7 @@ function emitProvisionError(
 export async function startSession(
   options: StartSessionOptions,
 ): Promise<StartSessionResult> {
+  assertCustomerContext(options.customerContext);
   const apiBase = options.apiBase.replace(/\/$/, "");
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -178,6 +219,9 @@ export async function startSession(
   const body = {
     project_id: options.projectId,
     build_id: options.buildId,
+    ...(options.customerContext !== undefined
+      ? { customer_context: options.customerContext }
+      : {}),
     async: options.async ?? true,
     wait_for_capacity: options.waitForCapacity ?? true,
   };
@@ -218,6 +262,7 @@ export async function startSession(
         expires_at: sync.expires_at,
       },
       jobId: sync.session_id,
+      buildId: sync.build_id ?? null,
     };
   }
 

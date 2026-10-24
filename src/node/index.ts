@@ -7,6 +7,8 @@ export {
   connectBrowserChatSession,
   connectDataSession,
   startSession,
+  CustomerContextTooLargeError,
+  MAX_CUSTOMER_CONTEXT_BYTES,
   fetchSessionApi,
   DEFAULT_SESSION_API_RETRY_DELAYS_MS,
   isRetryableSessionApiBody,
