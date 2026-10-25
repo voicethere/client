@@ -15,6 +15,11 @@ import {
 import type { SessionCredentials } from "./session-provision.js";
 import type { DebugConsole } from "./debug-console.js";
 import {
+  parseAgentInterruptedEvent,
+  parseAgentStateEvent,
+} from "../agent-control-events.js";
+import type { AgentInterruptedEvent, AgentStateEvent } from "../types.js";
+import {
   buildWebRtcConnectionStatus,
   CONNECTION_INTERRUPTED_MESSAGE,
   CONNECTION_LOST_MESSAGE,
@@ -231,6 +236,10 @@ export type BrowserVoiceSessionOptions = {
   onSessionError?: SessionErrorHandler;
   /** Fired for JSON messages on voice-control (e.g. speech_event). */
   onControlMessage?: (payload: Record<string, unknown>) => void;
+  /** Fired when the agent reports what it is doing (`agent_state` on voice-control). Older agents send none. */
+  onAgentState?: (event: AgentStateEvent) => void;
+  /** Fired when the caller cut the agent off (`agent_interrupted` on voice-control). Older agents send none. */
+  onAgentInterrupted?: (event: AgentInterruptedEvent) => void;
   /** Fired for binary frames on voice-control. */
   onBinaryMessage?: BinaryMessageHandler;
   /** Fired for binary frames on voicethere-sync. */
@@ -797,6 +806,25 @@ export async function connectBrowserVoiceSession(
     }
   };
 
+  const dispatchAgentEvents = (message: Record<string, unknown>): void => {
+    const state = parseAgentStateEvent(message);
+    if (state) {
+      try {
+        options.onAgentState?.(state);
+      } catch (err) {
+        debug?.warn("session", "on_agent_state_threw", String(err));
+      }
+    }
+    const interrupted = parseAgentInterruptedEvent(message);
+    if (interrupted) {
+      try {
+        options.onAgentInterrupted?.(interrupted);
+      } catch (err) {
+        debug?.warn("session", "on_agent_interrupted_threw", String(err));
+      }
+    }
+  };
+
   const handleControlPayload = (message: Record<string, unknown>) => {
     if (isSessionErrorEvent(message)) {
       notifySessionError(message);
@@ -880,6 +908,7 @@ export async function connectBrowserVoiceSession(
       return;
     }
     options.onControlMessage?.(message);
+    dispatchAgentEvents(message);
   };
 
   const stopDeadPairsProbe = (): void => {

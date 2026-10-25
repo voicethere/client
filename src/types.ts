@@ -38,3 +38,19 @@ export type ConnectedClient = {
   disconnect: () => void;
   on: (event: string, listener: (...args: unknown[]) => void) => void;
 };
+
+export type AgentStateName =
+  "listening" | "thinking" | "tool_call" | "speaking";
+
+/** What the agent is doing, sent by agents that call `setAgentState` in `@voicethere/agent`. */
+export interface AgentStateEvent {
+  state: AgentStateName;
+  detail?: string;
+}
+
+/** The caller cut the agent off; `replyPlayedMs` is how much of the reply was heard. */
+export interface AgentInterruptedEvent {
+  turnId?: string;
+  replyPlayedMs: number;
+  playedTextExact: boolean;
+}
