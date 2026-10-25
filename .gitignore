@@ -4,3 +4,5 @@ dist/
 .platform-cache/
 .env
 .env.local
+test-results/
+playwright-report/
