@@ -2,9 +2,16 @@
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-25
+
 ### Added
 
-- `onAgentState` / `onAgentInterrupted` callbacks and the `AgentStateEvent` / `AgentInterruptedEvent` types.
+- `onAgentState` / `onAgentInterrupted` session callbacks and the `AgentStateEvent` / `AgentInterruptedEvent` types, for agents that report what they are doing and when the caller cut them off (`@voicethere/agent` 0.11+).
+
+## [0.12.0] - 2026-10-24
+
+### Added
+
 - `customerContext` is now also sent when the session starts, so a project can route sessions by a context field during a canary deployment. `startSession` rejects a context over 4096 bytes with `CustomerContextTooLargeError` (`code: "customer_context_too_large"`) before sending anything.
 - A successful `startSession` result exposes `buildId` (`string | null`), the build the session runs on.
 
