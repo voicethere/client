@@ -4,6 +4,7 @@
 
 ### Added
 
+- `onAgentState` / `onAgentInterrupted` callbacks and the `AgentStateEvent` / `AgentInterruptedEvent` types.
 - `customerContext` is now also sent when the session starts, so a project can route sessions by a context field during a canary deployment. `startSession` rejects a context over 4096 bytes with `CustomerContextTooLargeError` (`code: "customer_context_too_large"`) before sending anything.
 - A successful `startSession` result exposes `buildId` (`string | null`), the build the session runs on.
 

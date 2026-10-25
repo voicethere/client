@@ -25,6 +25,8 @@ export type ConnectBrowserSessionOptions = {
   customerContext?: Record<string, unknown>;
   onSessionError?: import("../session-errors.js").SessionErrorHandler;
   onControlMessage?: (payload: Record<string, unknown>) => void;
+  onAgentState?: BrowserVoiceSessionOptions["onAgentState"];
+  onAgentInterrupted?: BrowserVoiceSessionOptions["onAgentInterrupted"];
   onBinaryMessage?: BrowserVoiceSessionOptions["onBinaryMessage"];
   onSyncBinaryMessage?: BrowserVoiceSessionOptions["onSyncBinaryMessage"];
   onAgentAudioTrack?: BrowserVoiceSessionOptions["onAgentAudioTrack"];
@@ -87,6 +89,8 @@ export async function connectBrowserSession(
     customerContext: options.customerContext,
     onSessionError: options.onSessionError,
     onControlMessage: options.onControlMessage,
+    onAgentState: options.onAgentState,
+    onAgentInterrupted: options.onAgentInterrupted,
     onBinaryMessage: options.onBinaryMessage,
     onSyncBinaryMessage: options.onSyncBinaryMessage,
     onAgentAudioTrack: options.onAgentAudioTrack,
@@ -129,6 +133,15 @@ export {
   type BrowserVoiceSession,
   type BrowserVoiceSessionOptions,
 } from "./browser-voice-session.js";
+export {
+  parseAgentInterruptedEvent,
+  parseAgentStateEvent,
+} from "../agent-control-events.js";
+export type {
+  AgentInterruptedEvent,
+  AgentStateEvent,
+  AgentStateName,
+} from "../types.js";
 export {
   CustomerContextTooLargeError,
   MAX_CUSTOMER_CONTEXT_BYTES,

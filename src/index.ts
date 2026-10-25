@@ -41,7 +41,14 @@ export {
   type ConnectionErrorSource,
   type RootConnectionErrorHandler,
 } from "./connection-errors.js";
+export {
+  parseAgentInterruptedEvent,
+  parseAgentStateEvent,
+} from "./agent-control-events.js";
 export type {
+  AgentInterruptedEvent,
+  AgentStateEvent,
+  AgentStateName,
   CloudSessionCredentials,
   VoiceThereClientOptions,
   ConnectedClient,

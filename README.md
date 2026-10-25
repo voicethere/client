@@ -191,6 +191,30 @@ setRootConnectionErrorHandler((error) => {
 `onSessionError` still runs for per-session UI. Details:
 [node-webrtc-rust `docs/connection-errors.md`](https://github.com/akirilyuk/node-webrtc-rust/blob/main/docs/connection-errors.md).
 
+## Agent state and interruptions
+
+Pass `onAgentState` and `onAgentInterrupted` to `connectBrowserSession` (or `connectBrowserVoiceSession`) to follow what the agent is doing:
+
+```typescript
+await connectBrowserSession({
+  mode: "voice",
+  credentials: provision.credentials,
+  onAgentState: ({ state, detail }) => {
+    // state: "listening" | "thinking" | "tool_call" | "speaking"
+    statusEl.textContent =
+      state === "thinking" ? "thinking…" : (detail ?? state);
+  },
+  onAgentInterrupted: ({ replyPlayedMs, playedTextExact }) => {
+    console.log(
+      `caller interrupted after ${replyPlayedMs} ms`,
+      playedTextExact,
+    );
+  },
+});
+```
+
+Agents send these events with `@voicethere/agent` 0.11+ on current runners. Older agents send none, so the callbacks simply never fire. `onControlMessage` still receives the raw payloads.
+
 ## Embed widget customization
 
 Import from `@voicethere/client/embed`. For production snippets, pass only a **client API key** (`vthc_…`) to `createVoiceThereWidgetAsync({ clientKey })`; the client fetches bootstrap JSON from the CDN (project id, session API base, and optional published appearance). Staging pages can pass `apiBase: "https://sessions.voicethere.dev/v1"` so the client uses the staging CDN. Legacy integrations may still pass `configUrl` (stable `config.json`) or inline `projectId` / `apiBase`.
