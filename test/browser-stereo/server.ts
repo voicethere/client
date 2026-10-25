@@ -3,6 +3,7 @@
  * Hosts a SessionPod with three sessions: a Node source (440 Hz dual-mono tone, panned hard left),
  * a session for the browser listener and a session for a Node listener.
  */
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -12,14 +13,37 @@ import { LocalAudioTrack, RemoteAudioTrack, RTCPeerConnection } from "@node-webr
 import { quatIdentity, vec3Zero } from "@node-webrtc-rust/sdk/mix";
 
 // The helpers package depends on its own signaling version (0.13.x); the client runtime
-// dependency is older. Load the one helpers uses so server and pod agree.
+// dependency is older. Resolve the copy helpers uses so server and pod agree.
 const requireFromHere = createRequire(import.meta.url);
-const helpersDir = path.dirname(path.dirname(requireFromHere.resolve("@node-webrtc-rust/helpers")));
-const signalingEntry = path.join(
-  path.dirname(helpersDir),
-  "node_modules/@node-webrtc-rust/signaling/dist/esm/index.js",
-);
-const signalingModule = (await import(pathToFileURL(signalingEntry).href)) as typeof import("@node-webrtc-rust/signaling");
+const requireFromHelpers = createRequire(requireFromHere.resolve("@node-webrtc-rust/helpers"));
+const signalingEntry = requireFromHelpers.resolve("@node-webrtc-rust/signaling");
+
+/** Nearest package.json above a resolved entry file (the packages do not export ./package.json). */
+function packageVersionOf(entry: string): string {
+  let dir = path.dirname(entry);
+  for (;;) {
+    const file = path.join(dir, "package.json");
+    if (existsSync(file)) {
+      const pkg = JSON.parse(readFileSync(file, "utf8")) as { name?: string; version?: string };
+      if (pkg.name === "@node-webrtc-rust/signaling") return pkg.version ?? "";
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return "";
+    dir = parent;
+  }
+}
+const signalingVersion = packageVersionOf(signalingEntry);
+if (!signalingVersion.startsWith("0.13.")) {
+  throw new Error(
+    `StereoHarnessSignalingVersionError: helpers uses signaling ${signalingVersion || "unknown"}, expected 0.13.x`,
+  );
+}
+const signalingImported = (await import(pathToFileURL(signalingEntry).href)) as Record<string, unknown> & {
+  default?: Record<string, unknown>;
+};
+const signalingModule = (signalingImported.SignalingServer
+  ? signalingImported
+  : signalingImported.default) as typeof import("@node-webrtc-rust/signaling");
 const { SignalingServer, SignalingClient, autoNegotiate } = signalingModule;
 
 const SOURCE_PEER = "client-src";

@@ -52,6 +52,7 @@ import {
   type VoiceSessionDiagnosticHandler,
 } from "./voice-session-diagnostics.js";
 import { waitForIceGatheringComplete } from "./wait-for-ice-gathering.js";
+import { preferOpusStereoInAnswer } from "./opus-stereo-sdp.js";
 import {
   isWebRtcConnectRetryError,
   WebRtcConnectRetryError,
@@ -212,6 +213,12 @@ export type BrowserVoiceSessionOptions = {
    */
   peerId?: string;
   requestMic?: boolean;
+  /**
+   * Ask the server for stereo Opus in the SDP answer (`stereo=1;sprop-stereo=1`, RFC 7587)
+   * so panned server mixes keep left/right. Default `true`. `false` sends the browser's
+   * answer unchanged.
+   */
+  preferStereoPlayback?: boolean;
   /** Preferred audio input device id (`deviceId: { ideal }` for getUserMedia). */
   audioInputDeviceId?: string;
   /**
@@ -1953,9 +1960,17 @@ export async function connectBrowserVoiceSession(
 
       step = "create_answer";
       if (!isOfferCurrent() || !isPcCurrent()) return;
-      const answer = await localPc.createAnswer();
+      let answer = await localPc.createAnswer();
       if (!isOfferCurrent() || !isPcCurrent()) return;
       logOfferStep(step);
+
+      if (options.preferStereoPlayback !== false && answer.sdp) {
+        const sdp = preferOpusStereoInAnswer(answer.sdp);
+        if (sdp !== answer.sdp) {
+          answer = { type: answer.type, sdp };
+          debug?.info("voice", "answer_opus_stereo");
+        }
+      }
 
       step = "set_local_description";
       await localPc.setLocalDescription(answer);

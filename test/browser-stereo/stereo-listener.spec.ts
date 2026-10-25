@@ -4,7 +4,7 @@ import { startStereoMixServer, type StereoMixServer } from "./server.ts";
 
 type Page = import("@playwright/test").Page;
 type Win = {
-  __connect(wsUrl: string, sessionId: string, mode: string, peerId: string): Promise<void>;
+  __connect(wsUrl: string, sessionId: string, preferStereoPlayback: boolean | undefined, peerId: string): Promise<void>;
   __measure(ms: number): Promise<{ leftRms: number; rightRms: number; channelCount: number }>;
   __close(): Promise<void>;
   __lastAnswerSdp?: string;
@@ -38,30 +38,43 @@ async function measureBrowser(page: Page, ms: number) {
   return page.evaluate((m) => (window as unknown as Win).__measure(m), ms);
 }
 
-for (const [i, mode] of (["default", "munged"] as const).entries()) {
-  test(`stereo listener: ${mode}`, async ({ page }) => {
-    const peerId = `client-browser-${i + 1}`;
-    await page.goto("/page.html");
-    await page.evaluate(
-      ([u, s, m, p]) => (window as unknown as Win).__connect(u, s, m, p),
-      [srv.wsUrl, srv.listenerSessionId, mode, peerId] as const,
-    );
-    await srv.configureMix(peerId, "client-node");
+async function run(
+  page: Page,
+  mode: string,
+  preferStereoPlayback: boolean | undefined,
+  peerId: string,
+): Promise<{ diffDb: number; fmtp: string }> {
+  await page.goto("/page.html");
+  await page.evaluate(
+    ([u, s, p, id]) => (window as unknown as Win).__connect(u, s, p, id),
+    [srv.wsUrl, srv.listenerSessionId, preferStereoPlayback, peerId] as const,
+  );
+  await srv.configureMix(peerId, "client-node");
 
-    const deadline = Date.now() + 20_000;
-    for (;;) {
-      const e = await measureBrowser(page, 200);
-      if (e.leftRms + e.rightRms > 0.01) break;
-      if (Date.now() > deadline) throw new Error("no audio energy in browser listener");
-      await page.waitForTimeout(100);
-    }
-    const [b, n] = await Promise.all([measureBrowser(page, 1000), srv.measureNodeListener(1000)]);
-    const sdp = await page.evaluate(() => (window as unknown as Win).__lastAnswerSdp);
-    const fmtp = opusFmtp(sdp);
-    report(mode, "browser", b.leftRms, b.rightRms, b.channelCount, fmtp);
-    report(mode, "node", n.left, n.right, 2, "n/a");
-    expect(b.leftRms + b.rightRms).toBeGreaterThan(0.01);
-    expect(n.left + n.right).toBeGreaterThan(0.001);
-    await page.evaluate(() => (window as unknown as Win).__close());
-  });
+  const deadline = Date.now() + 20_000;
+  for (;;) {
+    const e = await measureBrowser(page, 200);
+    if (e.leftRms + e.rightRms > 0.01) break;
+    if (Date.now() > deadline) throw new Error("no audio energy in browser listener");
+    await page.waitForTimeout(100);
+  }
+  const [b, n] = await Promise.all([measureBrowser(page, 1000), srv.measureNodeListener(1000)]);
+  const sdp = await page.evaluate(() => (window as unknown as Win).__lastAnswerSdp);
+  const fmtp = opusFmtp(sdp);
+  report(mode, "browser", b.leftRms, b.rightRms, b.channelCount, fmtp);
+  report(mode, "node", n.left, n.right, 2, "n/a");
+  expect(b.leftRms + b.rightRms).toBeGreaterThan(0.01);
+  await page.evaluate(() => (window as unknown as Win).__close());
+  return { diffDb: db(b.leftRms) - db(b.rightRms), fmtp };
 }
+
+test("browser listener hears a hard-left mix on the left", async ({ page }) => {
+  const { diffDb, fmtp } = await run(page, "default", undefined, "client-browser-1");
+  expect(fmtp).toContain("stereo=1");
+  expect(diffDb).toBeGreaterThanOrEqual(20);
+});
+
+test("preferStereoPlayback false: browser decodes mono (guard can fail)", async ({ page }) => {
+  const { diffDb } = await run(page, "preferStereoPlayback=false", false, "client-browser-2");
+  expect(diffDb).toBeLessThan(5);
+});

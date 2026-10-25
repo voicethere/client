@@ -1,10 +1,9 @@
 import { connectBrowserVoiceSession } from "../../src/browser/browser-voice-session.ts";
 import { getDefaultBrowserRuntime } from "../../src/browser/webrtc-runtime.ts";
 
-type Mode = "default" | "munged";
 type W = Window & {
   __lastAnswerSdp?: string;
-  __connect?: (wsUrl: string, sessionId: string, mode: Mode, peerId?: string) => Promise<void>;
+  __connect?: (wsUrl: string, sessionId: string, preferStereoPlayback?: boolean, peerId?: string) => Promise<void>;
   __measure?: (ms: number) => Promise<{ leftRms: number; rightRms: number; channelCount: number }>;
   __close?: () => Promise<void>;
 };
@@ -12,19 +11,7 @@ const w = window as unknown as W;
 let audio: HTMLAudioElement | null = null;
 let session: { close?: () => unknown; disconnect?: () => unknown } | null = null;
 
-function mungeStereo(sdp: string): string {
-  const opusPts = new Set<string>();
-  for (const m of sdp.matchAll(/^a=rtpmap:(\d+) opus\//gim)) opusPts.add(m[1]);
-  return sdp
-    .split("\r\n")
-    .map((line) => {
-      const m = /^a=fmtp:(\d+) /.exec(line);
-      return m && opusPts.has(m[1]) ? `${line};stereo=1;sprop-stereo=1` : line;
-    })
-    .join("\r\n");
-}
-
-w.__connect = async (wsUrl, sessionId, mode, peerId = "client-browser") => {
+w.__connect = async (wsUrl, sessionId, preferStereoPlayback, peerId = "client-browser") => {
   audio = document.createElement("audio");
   audio.autoplay = true;
   audio.muted = true;
@@ -35,10 +22,8 @@ w.__connect = async (wsUrl, sessionId, mode, peerId = "client-browser") => {
   class RecordingPc extends Native {
     override async setLocalDescription(desc?: RTCLocalSessionDescriptionInit): Promise<void> {
       if (desc?.sdp) {
-        let d = desc;
-        if (mode === "munged" && desc.type === "answer") d = { ...desc, sdp: mungeStereo(desc.sdp) };
-        if (d.type === "answer") w.__lastAnswerSdp = d.sdp;
-        return super.setLocalDescription(d);
+        if (desc.type === "answer") w.__lastAnswerSdp = desc.sdp;
+        return super.setLocalDescription(desc);
       }
       await super.setLocalDescription(desc);
       const cur = this.localDescription;
@@ -61,6 +46,7 @@ w.__connect = async (wsUrl, sessionId, mode, peerId = "client-browser") => {
     // No device in headless: falls back to a silent synthetic mic, which the host needs to start the voice client.
     requestMic: true,
     audioElement: audio,
+    ...(preferStereoPlayback === undefined ? {} : { preferStereoPlayback }),
     runtime,
   })) as never;
 
