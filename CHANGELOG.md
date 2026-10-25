@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-26
+
 ### Fixed
 
 - Browser sessions now ask for stereo Opus in the SDP answer (`stereo=1;sprop-stereo=1`), so server-side panning (positional and voice+data mixes) reaches browser listeners. Before, Chrome decoded the mix as mono and left/right collapsed.
