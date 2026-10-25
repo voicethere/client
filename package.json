@@ -36,7 +36,8 @@
     "demo:local": "tsx examples/local-connect.ts",
     "demo:cloud": "tsx examples/cloud-connect.ts",
     "bench:latency": "tsx examples/latency-bench/src/run.ts",
-    "demo:browser": "vite --config examples/browser-test/vite.config.ts"
+    "demo:browser": "vite --config examples/browser-test/vite.config.ts",
+    "test:browser": "playwright test -c playwright.config.ts"
   },
   "repository": {
     "type": "git",
@@ -63,7 +64,9 @@
     "@node-webrtc-rust/signaling": "0.7.4"
   },
   "devDependencies": {
-    "@node-webrtc-rust/sdk": "0.7.4",
+    "@node-webrtc-rust/helpers": "0.13.1",
+    "@node-webrtc-rust/sdk": "0.13.1",
+    "@playwright/test": "1.62.1",
     "@types/node": "22.20.1",
     "@types/ws": "8.5.14",
     "tsx": "4.19.2",

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Browser sessions now ask for stereo Opus in the SDP answer (`stereo=1;sprop-stereo=1`), so server-side panning (positional and voice+data mixes) reaches browser listeners. Before, Chrome decoded the mix as mono and left/right collapsed.
+
+### Added
+
+- `preferStereoPlayback` option on `connectBrowserVoiceSession` (default `true`). Pass `false` to send the browser's SDP answer unchanged.
+
 ## [0.13.0] - 2026-10-25
 
 ### Added
