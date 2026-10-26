@@ -12,6 +12,9 @@ import { SessionPod, VoiceSessionBudget, resetProcessVoiceSessionBudget } from "
 import { LocalAudioTrack, RemoteAudioTrack, RTCPeerConnection } from "@node-webrtc-rust/sdk";
 import { quatIdentity, vec3Zero } from "@node-webrtc-rust/sdk/mix";
 
+import { connectBrowserVoiceSession } from "../../src/browser/browser-voice-session.ts";
+import { createNodeWebRtcRuntime } from "../../src/node/index.ts";
+
 // The helpers package depends on its own signaling version (0.13.x); the client runtime
 // dependency is older. Resolve the copy helpers uses so server and pod agree.
 const requireFromHere = createRequire(import.meta.url);
@@ -51,6 +54,8 @@ const SOURCE_SESSION = "session-src";
 const LISTEN_SESSION = "session-listen";
 const NODE_SESSION = "session-node";
 const NODE_PEER = "client-node";
+const CLIENT_NODE_SESSION = "session-node-client";
+const CLIENT_NODE_PEER = "client-node-client";
 
 const SAMPLE_RATE = 48_000;
 const FRAME_SAMPLES = 960;
@@ -188,7 +193,9 @@ export type StereoMixServer = {
   wsUrl: string;
   listenerSessionId: string;
   nodeListenerSessionId: string;
-  configureMix(browserPeerId: string, nodePeerId: string): Promise<void>;
+  configureMix(browserPeerId: string, nodePeerId: string, clientNodePeerId?: string): Promise<void>;
+  /** Joins with the client's own Node runtime (`connectBrowserVoiceSession` + `createNodeWebRtcRuntime`). */
+  connectClientNodeListener(): Promise<{ peerId: string; measure(ms: number): Promise<InboundRms> }>;
   measureNodeListener(ms: number): Promise<InboundRms>;
   close(): Promise<void>;
 };
@@ -207,7 +214,7 @@ export async function startStereoMixServer(): Promise<StereoMixServer> {
     sessionBudget: new VoiceSessionBudget(8),
     maxPreparedSessions: 8,
   } as ConstructorParameters<typeof SessionPod>[1]);
-  for (const id of [SOURCE_SESSION, LISTEN_SESSION, NODE_SESSION]) {
+  for (const id of [SOURCE_SESSION, LISTEN_SESSION, NODE_SESSION, CLIENT_NODE_SESSION]) {
     await pod.ensureSession(id);
   }
 
@@ -234,7 +241,7 @@ export async function startStereoMixServer(): Promise<StereoMixServer> {
 
   const hostFor = (sessionId: string): Host | undefined => (pod as unknown as PodAccess).slots.get(sessionId)?.host;
   const anyActive = (peerId: string): boolean =>
-    [SOURCE_SESSION, LISTEN_SESSION, NODE_SESSION].some((s) => hostFor(s)?.isVoiceClientActive(peerId));
+    [SOURCE_SESSION, LISTEN_SESSION, NODE_SESSION, CLIENT_NODE_SESSION].some((s) => hostFor(s)?.isVoiceClientActive(peerId));
   const waitActive = async (peerId: string, timeoutMs = 20_000): Promise<void> => {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -244,24 +251,68 @@ export async function startStereoMixServer(): Promise<StereoMixServer> {
     throw new Error(`timed out waiting for active voice client ${peerId}`);
   };
 
+  const clientNodeCloses: Array<() => unknown> = [];
+  const clientNodeMeters: Array<{ stop(): void }> = [];
+
   return {
     wsUrl,
     listenerSessionId: LISTEN_SESSION,
     nodeListenerSessionId: NODE_SESSION,
-    async configureMix(browserPeerId, nodePeerId) {
-      for (const id of [SOURCE_PEER, browserPeerId, nodePeerId]) await waitActive(id);
+    async connectClientNodeListener() {
+      let resolveTrack!: (t: RemoteAudioTrack) => void;
+      const trackPromise = new Promise<RemoteAudioTrack>((resolve) => {
+        resolveTrack = resolve;
+      });
+      const session = await connectBrowserVoiceSession({
+        credentials: {
+          session_id: CLIENT_NODE_SESSION,
+          mode: "voice+data",
+          join_token: "",
+          signaling_url: wsUrl,
+          room_id: CLIENT_NODE_SESSION,
+          ice_servers: [],
+          expires_at: "",
+        } as never,
+        peerId: CLIENT_NODE_PEER,
+        requestMic: true,
+        runtime: createNodeWebRtcRuntime(),
+        onAgentAudioTrack: (track) => resolveTrack(track as unknown as RemoteAudioTrack),
+      });
+      clientNodeCloses.push(() => (session as { close?: () => unknown }).close?.());
+      const track = await Promise.race([
+        trackPromise,
+        delay(30_000).then(() => {
+          throw new Error("timed out waiting for agent audio (client Node runtime)");
+        }),
+      ]);
+      const m = createInboundMeter(track);
+      clientNodeMeters.push(m);
+      return { peerId: CLIENT_NODE_PEER, measure: (ms) => m.measure(ms) };
+    },
+    async configureMix(browserPeerId, nodePeerId, clientNodePeerId) {
+      const peers = [SOURCE_PEER, browserPeerId, nodePeerId, clientNodePeerId ?? ""].filter((id) => id !== "");
+      for (const id of peers) await waitActive(id);
       const host = hostFor(LISTEN_SESSION);
       if (!host) throw new Error("no host for listener session");
-      host.createMixGroup({ id: "all", clientIds: [SOURCE_PEER, browserPeerId, nodePeerId] });
+      host.createMixGroup({ id: "all", clientIds: peers });
       host.setPositionalMixing(true);
-      host.setClientPose(browserPeerId, centerPose);
+      if (browserPeerId) host.setClientPose(browserPeerId, centerPose);
       host.setClientPose(nodePeerId, centerPose);
+      if (clientNodePeerId) host.setClientPose(clientNodePeerId, centerPose);
       host.setClientPose(SOURCE_PEER, poseAtX(-3));
     },
     measureNodeListener: (ms) => meter.measure(ms),
     async close() {
       stopped = true;
       meter.stop();
+      for (const m of clientNodeMeters) m.stop();
+      for (const c of clientNodeCloses) {
+        try {
+          await c();
+        } catch {
+          /* ignore */
+        }
+      }
       await pump.catch(() => undefined);
       source.close();
       nodeListener.close();

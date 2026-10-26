@@ -78,3 +78,19 @@ test("preferStereoPlayback false: browser decodes mono (guard can fail)", async 
   const { diffDb } = await run(page, "preferStereoPlayback=false", false, "client-browser-2");
   expect(diffDb).toBeLessThan(5);
 });
+
+test("client Node runtime connects and hears the hard-left mix", async () => {
+  // Real client Node path: connectBrowserVoiceSession + createNodeWebRtcRuntime (webrtc-rs).
+  // A rewritten answer fails here with "new sdp does not match previous answer".
+  const listener = await srv.connectClientNodeListener();
+  await srv.configureMix("", "client-node", listener.peerId);
+  const deadline = Date.now() + 20_000;
+  for (;;) {
+    const e = await listener.measure(300);
+    if (e.left + e.right > 0.01) break;
+    if (Date.now() > deadline) throw new Error("no audio energy in client Node runtime listener");
+  }
+  const m = await listener.measure(1000);
+  report("client-node-runtime", "node", m.left, m.right, 2, "n/a");
+  expect(db(m.left) - db(m.right)).toBeGreaterThanOrEqual(20);
+});

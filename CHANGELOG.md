@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-10-26
+
+### Fixed
+
+- Node sessions (`@voicethere/client/node`) failed to connect on 0.14.0 with `new sdp does not match previous answer`: the stereo rewrite changed answers that already asked for stereo, and the Node WebRTC runtime rejects a changed answer. Answers that already carry `stereo=1` are now left unchanged.
+
 ## [0.14.0] - 2026-10-26
 
 ### Fixed
