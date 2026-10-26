@@ -8,6 +8,9 @@
  * Other parameters keep their order and values. Existing `stereo` / `sprop-stereo`
  * values (including `0`) are replaced, never duplicated. SDP without Opus is returned
  * unchanged (the same string).
+ *
+ * Answers that already ask for stereo on every Opus payload type are returned unchanged.
+ * Some WebRTC stacks (webrtc-rs) reject a local answer that differs from createAnswer's output.
  */
 export function preferOpusStereoInAnswer(sdp: string): string {
   const eol = sdp.includes("\r\n") ? "\r\n" : "\n";
@@ -21,6 +24,13 @@ export function preferOpusStereoInAnswer(sdp: string): string {
     if (m) opusPts.add(m[1]);
   }
   if (opusPts.size === 0) return sdp;
+
+  const stereoPts = new Set<string>();
+  for (const line of lines) {
+    const m = /^a=fmtp:(\d+) (.*)$/.exec(line);
+    if (m && opusPts.has(m[1]) && hasStereoOne(m[2])) stereoPts.add(m[1]);
+  }
+  if (stereoPts.size === opusPts.size) return sdp;
 
   const withFmtp = new Set<string>();
   const out: string[] = [];
@@ -59,4 +69,12 @@ function setStereoParams(params: string): string {
     else parts[idx] = `${key}=1`;
   }
   return parts.join(";");
+}
+
+function hasStereoOne(params: string): boolean {
+  return params.split(";").some((p) => {
+    const eq = p.indexOf("=");
+    if (eq === -1) return false;
+    return p.slice(0, eq).trim().toLowerCase() === "stereo" && p.slice(eq + 1).trim() === "1";
+  });
 }

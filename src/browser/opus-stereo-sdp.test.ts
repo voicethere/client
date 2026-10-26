@@ -37,6 +37,25 @@ describe("preferOpusStereoInAnswer", () => {
     expect(out.match(/sprop-stereo=1/g)?.length).toBe(1);
   });
 
+  it("answer that already asks for stereo is returned unchanged (webrtc-rs answer)", () => {
+    const input = sdpOf(["v=0", ...audioSection("111", "minptime=10;useinbandfec=1;stereo=1")]);
+    const out = preferOpusStereoInAnswer(input);
+    expect(out).toBe(input);
+    expect(out).not.toContain("sprop-stereo");
+  });
+
+  it("stereo=1 on only one of two Opus payload types still rewrites the other", () => {
+    const out = preferOpusStereoInAnswer(
+      sdpOf([
+        "v=0",
+        ...audioSection("111", "minptime=10;stereo=1"),
+        ...audioSection("109", "useinbandfec=1"),
+      ]),
+    );
+    expect(out).toContain("a=fmtp:109 useinbandfec=1;stereo=1;sprop-stereo=1");
+    expect(out).toContain("a=fmtp:111 minptime=10;stereo=1;sprop-stereo=1");
+  });
+
   it("every Opus payload type is rewritten", () => {
     const out = preferOpusStereoInAnswer(
       sdpOf([
