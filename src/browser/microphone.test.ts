@@ -46,6 +46,48 @@ describe("microphone helpers", () => {
     result.dispose();
   });
 
+  it("acquireAudioInput requests AEC/NS/AGC without a deviceId", async () => {
+    const gum = vi.fn(async (_c: MediaStreamConstraints) => {
+      return {
+        getAudioTracks: () => [{ getSettings: () => ({}), stop: () => {} }],
+        getTracks: () => [],
+      } as unknown as MediaStream;
+    });
+    const result = await acquireAudioInput({ getUserMedia: gum });
+    expect(gum.mock.calls[0]?.[0]).toEqual({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+      video: false,
+    });
+    result.dispose();
+  });
+
+  it("acquireAudioInput requests AEC/NS/AGC with deviceId.ideal (device switch path)", async () => {
+    const gum = vi.fn(async (_c: MediaStreamConstraints) => {
+      return {
+        getAudioTracks: () => [{ getSettings: () => ({}), stop: () => {} }],
+        getTracks: () => [],
+      } as unknown as MediaStream;
+    });
+    const result = await acquireAudioInput({
+      getUserMedia: gum,
+      deviceId: "mic-b",
+    });
+    expect(gum.mock.calls[0]?.[0]).toEqual({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        deviceId: { ideal: "mic-b" },
+      },
+      video: false,
+    });
+    result.dispose();
+  });
+
   it("acquireAudioInput uses synthetic when getUserMedia is missing", async () => {
     const result = await acquireAudioInput({});
     expect(result.state).toBe("unavailable");
