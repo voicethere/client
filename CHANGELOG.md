@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-10-27
+
+### Fixed
+
+- The microphone now explicitly requests echo cancellation, noise suppression and auto gain control, with or without a chosen input device.
+
 ## [0.14.1] - 2026-10-26
 
 ### Fixed

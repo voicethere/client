@@ -31,13 +31,19 @@ export type AcquireAudioInputResult = {
   dispose: () => void;
 };
 
-function buildAudioConstraints(
+/** Explicit AEC/NS/AGC so browsers use echo cancellation against element playout. */
+export function buildAudioConstraints(
   deviceId?: string | null,
-): boolean | MediaTrackConstraints {
+): MediaTrackConstraints {
+  const constraints: MediaTrackConstraints = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  };
   if (deviceId) {
-    return { deviceId: { ideal: deviceId } };
+    constraints.deviceId = { ideal: deviceId };
   }
-  return true;
+  return constraints;
 }
 
 function classifyGumError(error: unknown): "denied" | "unavailable" {
