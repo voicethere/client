@@ -56,6 +56,9 @@ const NODE_SESSION = "session-node";
 const NODE_PEER = "client-node";
 const CLIENT_NODE_SESSION = "session-node-client";
 const CLIENT_NODE_PEER = "client-node-client";
+const CLOSE_BROWSER_SESSION = "session-close-browser";
+const CLOSE_NODE_SESSION = "session-close-node";
+const CLOSE_NODE_PEER = "client-close-node";
 
 const SAMPLE_RATE = 48_000;
 const FRAME_SAMPLES = 960;
@@ -189,6 +192,14 @@ function createInboundMeter(track: RemoteAudioTrack) {
   };
 }
 
+export type CloseObserver = {
+  peerId: string;
+  sessionId: string;
+  errors: Array<{ code: string; message: string; recoverable?: boolean }>;
+  reconnects: () => number;
+  state: () => string;
+};
+
 export type StereoMixServer = {
   wsUrl: string;
   listenerSessionId: string;
@@ -197,11 +208,23 @@ export type StereoMixServer = {
   /** Joins with the client's own Node runtime (`connectBrowserVoiceSession` + `createNodeWebRtcRuntime`). */
   connectClientNodeListener(): Promise<{ peerId: string; measure(ms: number): Promise<InboundRms> }>;
   measureNodeListener(ms: number): Promise<InboundRms>;
+  closeBrowserSessionId: string;
+  /** Joins the close-test session with the client's Node runtime and records session errors and reconnects. */
+  connectCloseNodeClient(): Promise<CloseObserver>;
+  /**
+   * Server-side time-limit close, same order as the runner: send `session_close`, flush the control
+   * channel, then tear the session down.
+   */
+  sendTimeLimitCloseAndTeardown(peerId: string, sessionId: string, message: string): Promise<void>;
   close(): Promise<void>;
 };
 
 export async function startStereoMixServer(): Promise<StereoMixServer> {
   resetProcessVoiceSessionBudget();
+  const peerContexts = new Map<
+    string,
+    { peerId: string; sendToClient: (p: unknown) => void; flushToClient?: () => Promise<boolean> }
+  >();
   const server = new SignalingServer({ port: 0 });
   await server.listen(0, "127.0.0.1");
   const wsUrl = `ws://127.0.0.1:${server.port}`;
@@ -213,8 +236,13 @@ export async function startStereoMixServer(): Promise<StereoMixServer> {
     voiceConfig: { stt: { provider: "mock" }, tts: { provider: "mock" } },
     sessionBudget: new VoiceSessionBudget(8),
     maxPreparedSessions: 8,
+    voiceHandler: {
+      onPeerConnected: (ctx: { peerId: string; sendToClient: (p: unknown) => void; flushToClient?: () => Promise<boolean> }) => {
+        peerContexts.set(ctx.peerId, ctx);
+      },
+    },
   } as ConstructorParameters<typeof SessionPod>[1]);
-  for (const id of [SOURCE_SESSION, LISTEN_SESSION, NODE_SESSION, CLIENT_NODE_SESSION]) {
+  for (const id of [SOURCE_SESSION, LISTEN_SESSION, NODE_SESSION, CLIENT_NODE_SESSION, CLOSE_BROWSER_SESSION, CLOSE_NODE_SESSION]) {
     await pod.ensureSession(id);
   }
 
@@ -302,6 +330,50 @@ export async function startStereoMixServer(): Promise<StereoMixServer> {
       host.setClientPose(SOURCE_PEER, poseAtX(-3));
     },
     measureNodeListener: (ms) => meter.measure(ms),
+    closeBrowserSessionId: CLOSE_BROWSER_SESSION,
+    async connectCloseNodeClient() {
+      const errors: CloseObserver["errors"] = [];
+      let reconnects = 0;
+      const session = await connectBrowserVoiceSession({
+        credentials: {
+          session_id: CLOSE_NODE_SESSION,
+          mode: "voice+data",
+          join_token: "",
+          signaling_url: wsUrl,
+          room_id: CLOSE_NODE_SESSION,
+          ice_servers: [],
+          expires_at: "",
+        } as never,
+        peerId: CLOSE_NODE_PEER,
+        requestMic: true,
+        runtime: createNodeWebRtcRuntime(),
+        onReconnecting: () => {
+          reconnects++;
+        },
+        onSessionError: (event) => {
+          errors.push({ code: event.code, message: event.message, recoverable: event.recoverable });
+        },
+      });
+      clientNodeCloses.push(() => (session as { close?: () => unknown }).close?.());
+      return {
+        peerId: CLOSE_NODE_PEER,
+        sessionId: CLOSE_NODE_SESSION,
+        errors,
+        reconnects: () => reconnects,
+        state: () => session.getConnectionState(),
+      };
+    },
+    async sendTimeLimitCloseAndTeardown(peerId, sessionId, message) {
+      const deadline = Date.now() + 20_000;
+      while (!peerContexts.has(peerId)) {
+        if (Date.now() > deadline) throw new Error(`no voice context for ${peerId}`);
+        await delay(50);
+      }
+      const ctx = peerContexts.get(peerId)!;
+      ctx.sendToClient({ type: "session_close", code: "max_session_length", message });
+      await ctx.flushToClient?.();
+      await pod.teardownSession(sessionId, "max_session_length");
+    },
     async close() {
       stopped = true;
       meter.stop();

@@ -6,10 +6,16 @@ type W = Window & {
   __connect?: (wsUrl: string, sessionId: string, preferStereoPlayback?: boolean, peerId?: string) => Promise<void>;
   __measure?: (ms: number) => Promise<{ leftRms: number; rightRms: number; channelCount: number }>;
   __close?: () => Promise<void>;
+  __sessionErrors?: Array<{ code: string; message: string; recoverable?: boolean }>;
+  __reconnects?: number;
+  __connectionState?: () => string;
 };
 const w = window as unknown as W;
 let audio: HTMLAudioElement | null = null;
 let session: { close?: () => unknown; disconnect?: () => unknown } | null = null;
+
+w.__sessionErrors = [];
+w.__reconnects = 0;
 
 w.__connect = async (wsUrl, sessionId, preferStereoPlayback, peerId = "client-browser") => {
   audio = document.createElement("audio");
@@ -48,7 +54,14 @@ w.__connect = async (wsUrl, sessionId, preferStereoPlayback, peerId = "client-br
     audioElement: audio,
     ...(preferStereoPlayback === undefined ? {} : { preferStereoPlayback }),
     runtime,
+    onReconnecting: () => {
+      w.__reconnects = (w.__reconnects ?? 0) + 1;
+    },
+    onSessionError: (event) => {
+      w.__sessionErrors?.push({ code: event.code, message: event.message, recoverable: event.recoverable });
+    },
   })) as never;
+  w.__connectionState = () => (session as unknown as { getConnectionState(): string }).getConnectionState();
 
   const deadline = Date.now() + 20_000;
   for (;;) {

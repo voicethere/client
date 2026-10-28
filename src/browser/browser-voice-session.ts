@@ -889,12 +889,21 @@ export async function connectBrowserVoiceSession(
         typeof message.message === "string" ? message.message : undefined;
       const idleTimeout =
         closeCode === "idle_timeout" || closeReason === "idle_timeout";
+      const maxLength =
+        closeCode === "max_session_length" ||
+        closeReason === "max_session_length";
       notifySessionError({
         type: "session_error",
-        code: idleTimeout ? "SESSION_IDLE_TIMEOUT" : "WEBRTC_CONNECTION_CLOSED",
+        code: idleTimeout
+          ? "SESSION_IDLE_TIMEOUT"
+          : maxLength
+            ? "SESSION_MAX_LENGTH"
+            : "WEBRTC_CONNECTION_CLOSED",
         message: idleTimeout
           ? (closeMessage ?? "Session ended due to idle timeout")
-          : (closeMessage ?? "WebRTC session closed by server"),
+          : maxLength
+            ? (closeMessage ?? "Session reached its time limit")
+            : (closeMessage ?? "WebRTC session closed by server"),
         session_id: orchestratorSessionId,
         recoverable: false,
         occurred_at: new Date().toISOString(),
