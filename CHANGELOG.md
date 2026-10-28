@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-28
+
+### Added
+
+- `SESSION_MAX_LENGTH` session error. A server `session_close` with code `max_session_length` is now a terminal, non-recoverable error whose `message` is the close reason (default `Session reached its time limit`), instead of `WEBRTC_CONNECTION_CLOSED`. No reconnect follows.
+
 ## [0.14.2] - 2026-10-27
 
 ### Fixed

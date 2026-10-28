@@ -137,6 +137,8 @@ Library reference: [`node-webrtc-rust/docs/signaling-peer-ids.md`](https://githu
 
 In `@voicethere/agent`, call `disconnectClient(sessionId, { reason })` to kick a peer from agent code (e.g. stale multiplayer state).
 
+**Session time limit.** When a session reaches its maximum length (the project's `max_session_minutes`, or a limit the agent set for that session), the server sends one `session_close` with code `max_session_length`. The client reports a terminal session error `SESSION_MAX_LENGTH` and does not reconnect. Its `message` is the close reason the project or the agent configured, or `Session reached its time limit` when none was sent.
+
 Configure idle timeouts per project in the dashboard **Session settings** panel or `voicethere projects session-settings set`.
 
 ## Session error events

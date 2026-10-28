@@ -448,6 +448,68 @@ describe("connectBrowserVoiceSession ICE reconnect", () => {
     expect(MockWebSocket.instances.length).toBe(wsCountBefore);
   });
 
+  it.each([
+    ["Demo time is up.", "Demo time is up."],
+    [undefined, "Session reached its time limit"],
+  ])(
+    "maps inbound session_close max_session_length to terminal SESSION_MAX_LENGTH (message %s)",
+    async (closeMessage, expectedMessage) => {
+      vi.useFakeTimers();
+
+      const sessionErrors: SessionErrorEvent[] = [];
+      const reconnecting = vi.fn();
+      const runtime: WebRtcRuntime = {
+        WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
+        RTCPeerConnection:
+          MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+      };
+
+      const session = await connectBrowserVoiceSession({
+        credentials,
+        requestMic: false,
+        readiness: "data",
+        runtime,
+        maxAutoReconnectAttempts: 2,
+        onReconnecting: reconnecting,
+        onSessionError: (event) => sessionErrors.push(event),
+      });
+
+      sendOffer(MockWebSocket.instances[0]);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const control = openDataChannels(MockPeerConnection.instances[0]);
+      await session.waitForConnected(1_000);
+
+      control.onmessage?.({
+        data: JSON.stringify({
+          type: "session_close",
+          code: "max_session_length",
+          ...(closeMessage ? { message: closeMessage } : {}),
+        }),
+      });
+      await Promise.resolve();
+
+      expect(sessionErrors).toHaveLength(1);
+      expect(sessionErrors[0]).toMatchObject({
+        code: "SESSION_MAX_LENGTH",
+        message: expectedMessage,
+        recoverable: false,
+      });
+      expect(session.getConnectionState()).toBe("closed");
+
+      const wsCountBefore = MockWebSocket.instances.length;
+      MockPeerConnection.instances[0].fail();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(8_000);
+      await Promise.resolve();
+
+      expect(reconnecting).not.toHaveBeenCalled();
+      expect(sessionErrors).toHaveLength(1);
+      expect(MockWebSocket.instances.length).toBe(wsCountBefore);
+    },
+  );
+
   it("updates join token from session_reconnect_token and uses it on explicit reconnect", async () => {
     const runtime: WebRtcRuntime = {
       WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
