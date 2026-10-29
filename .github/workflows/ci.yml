@@ -29,6 +29,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/release/')
     needs: quality
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
@@ -73,13 +74,26 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Check whether this version is already on npm
+        id: exists
+        run: |
+          if bash scripts/ci/npm-version-exists.sh @voicethere/client "${{ steps.version.outputs.version }}"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm
+        if: steps.exists.outputs.exists != 'true'
         run: npm publish --access public
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Skip publish
+        if: steps.exists.outputs.exists == 'true'
+        run: echo "already published, skipping"
+
       - name: Verify package on registry
         run: bash scripts/ci/wait-for-npm-package.sh @voicethere/client "${{ steps.version.outputs.version }}"
         env:
-          NPM_REGISTRY_VERIFY_ATTEMPTS: 24
-          NPM_REGISTRY_VERIFY_SLEEP_SECONDS: 5
+          NPM_REGISTRY_VERIFY_TIMEOUT_SECONDS: 900
