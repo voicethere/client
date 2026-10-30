@@ -505,11 +505,8 @@
 - **`onSessionError`** on `startSession` and `connectBrowserSession` — provisioning failures, WebRTC errors, and runner `session_error` DC events
 - **`customerContext`** on voice/browser sessions — forwarded in `session_hello` for agent `errorHook` context
 - Exports from `@voicethere/client/browser`: `SESSION_ERROR_CODES`, `createLocalSessionError`, `emitSessionError`, related types
-
-### Fixed
-
-- **Node headless voice** — attach mic with `addTrack` **before** `setRemoteDescription` so the answer SDP includes `sendrecv` (required by `@node-webrtc-rust/sdk`; fixes runner mic-track timeout in staging E2E).
-- **Mic RTP pump** — after `connected`, send kick + silent PCM frames via `writeSample` so the server receives `ontrack` and starts VoiceAgent.
+- **`sendCloseSignal(reason?)`** on browser voice sessions — asks the server to close the WebRTC leg before the client disconnects
+- **`connectDataSession`** (browser and `@voicethere/client/node`) — DataChannel-only session without a microphone
 
 ## [0.5.1] - 2026-06-18
 
