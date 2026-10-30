@@ -284,3 +284,129 @@ describe("createSpokenChatCaption", () => {
     caption.dispose();
   });
 });
+
+describe("createSpokenChatCaption streamed reply (partial: true)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const setup = () => {
+    const upserts: Array<[string, string]> = [];
+    const caption = createSpokenChatCaption({
+      enabled: true,
+      onUpsert: (id, text) => upserts.push([id, text]),
+    });
+    const reply = (text: string, partial: boolean, id = "t1") =>
+      caption.handleControlMessage({
+        type: "chat_reply",
+        utteranceId: id,
+        stream: true,
+        text,
+        ...(partial ? { partial: true } : {}),
+      });
+    const speech = (event: string) =>
+      caption.handleControlMessage({ type: "speech_event", event });
+    const last = () => upserts[upserts.length - 1]?.[1];
+    return { caption, upserts, reply, speech, last };
+  };
+
+  it("streamed reply grows without reset", () => {
+    const { caption, upserts, reply, speech, last } = setup();
+    reply("One two.", true);
+    speech("agent_speaking_start");
+    expect(last()).toBe("One");
+    reply("One two. Three four.", true);
+    for (const [, text] of upserts) {
+      expect("One two. Three four.".startsWith(text)).toBe(true);
+    }
+    expect(last()).toBe("One");
+    vi.advanceTimersByTime(330 * 3);
+    expect(last()).toBe("One two. Three four.");
+    const lengths = upserts.map(([, t]) => t.length);
+    expect(lengths).toEqual([...lengths].sort((a, b) => a - b));
+    caption.dispose();
+  });
+
+  it("speaking_end pauses, start resumes", () => {
+    const { caption, reply, speech, last } = setup();
+    reply("a b c d e f", true);
+    speech("agent_speaking_start");
+    vi.advanceTimersByTime(330);
+    expect(last()).toBe("a b");
+    speech("agent_speaking_end");
+    vi.advanceTimersByTime(330 * 3);
+    expect(last()).toBe("a b");
+    speech("agent_speaking_start");
+    vi.advanceTimersByTime(330);
+    expect(last()).toBe("a b c");
+    caption.dispose();
+  });
+
+  it("final text completes without jump", () => {
+    const { caption, upserts, reply, speech, last } = setup();
+    reply("one two", true);
+    speech("agent_speaking_start");
+    expect(last()).toBe("one");
+    reply("one two three four five six", false);
+    expect(last()).toBe("one");
+    vi.advanceTimersByTime(330);
+    expect(last()).toBe("one two");
+    speech("agent_speaking_end");
+    expect(last()).toBe("one two");
+    speech("agent_speaking_start");
+    vi.advanceTimersByTime(330);
+    expect(last()).toBe("one two three");
+    vi.advanceTimersByTime(330 * 10);
+    expect(last()).toBe("one two three four five six");
+    const count = upserts.length;
+    vi.advanceTimersByTime(330 * 10);
+    expect(upserts.length).toBe(count);
+    caption.dispose();
+  });
+
+  it("barge_in freezes a streamed reply", () => {
+    const { caption, reply, speech, last } = setup();
+    reply("a b c", true);
+    speech("agent_speaking_start");
+    vi.advanceTimersByTime(330);
+    expect(last()).toBe("a b");
+    speech("barge_in");
+    reply("a b c d e", true);
+    reply("a b c d e f", false);
+    vi.advanceTimersByTime(330 * 10);
+    expect(last()).toBe("a b");
+    caption.dispose();
+  });
+
+  it("completed id re-sent is a no-op", () => {
+    const { caption, upserts, reply, speech } = setup();
+    reply("a b", true);
+    speech("agent_speaking_start");
+    reply("a b", false);
+    vi.advanceTimersByTime(330 * 3);
+    const count = upserts.length;
+    reply("a b", false);
+    vi.advanceTimersByTime(330 * 10);
+    expect(upserts.length).toBe(count);
+    caption.dispose();
+  });
+
+  it("two streamed ids keep their own text", () => {
+    const { caption, upserts, reply, speech } = setup();
+    reply("alpha one", true, "A");
+    speech("agent_speaking_start");
+    reply("beta one", true, "B");
+    reply("alpha one two", true, "A");
+    speech("agent_speaking_start");
+    vi.advanceTimersByTime(330 * 5);
+    for (const [id, text] of upserts) {
+      const expected = id === "A" ? "alpha one two" : "beta one";
+      expect(expected.startsWith(text)).toBe(true);
+    }
+    caption.dispose();
+  });
+});

@@ -1,5 +1,6 @@
 const START_FALLBACK_MS = 400;
 const DEFAULT_MS_PER_WORD = 330;
+const COMPLETED_IDS_MAX = 32;
 
 export type SpokenChatCaptionOptions = {
   enabled: boolean;
@@ -17,6 +18,12 @@ type UtteranceState = {
   revealStarted: boolean;
   waitingForStart: boolean;
   streamExplicit: boolean;
+  /** Set once any chat_reply for this utterance carried `partial: true`. */
+  streamed: boolean;
+  /** A chat_reply without `partial` arrived: the words are complete. */
+  final: boolean;
+  /** Streamed only: between speech chunks, the reveal waits for the next start. */
+  paused: boolean;
   startTimeoutId?: ReturnType<typeof setTimeout>;
   tickTimeoutId?: ReturnType<typeof setTimeout>;
 };
@@ -95,6 +102,7 @@ export function createSpokenChatCaption(
   let enabled = opts.enabled;
   let state: UtteranceState | null = null;
   let utteranceCounter = 0;
+  const completed = new Map<string, string>();
 
   const setTimeoutFn = opts.setTimeout ?? setTimeout;
   const clearTimeoutFn = opts.clearTimeout ?? clearTimeout;
@@ -125,18 +133,50 @@ export function createSpokenChatCaption(
     opts.onUpsert(state.utteranceId, visibleTextFor(state));
   };
 
+  const markCompleted = (utterance: UtteranceState): void => {
+    completed.delete(utterance.utteranceId);
+    completed.set(utterance.utteranceId, utterance.words.join(" "));
+    while (completed.size > COMPLETED_IDS_MAX) {
+      const oldest = completed.keys().next().value;
+      if (oldest === undefined) break;
+      completed.delete(oldest);
+    }
+  };
+
+  /** A streamed utterance is done when its text is final and fully shown. */
+  const finishStreamedIfComplete = (utterance: UtteranceState): void => {
+    if (
+      !utterance.streamed ||
+      !utterance.final ||
+      utterance.frozen ||
+      utterance.visibleWordCount < utterance.words.length
+    ) {
+      return;
+    }
+    clearUtteranceTimers(utterance);
+    markCompleted(utterance);
+    if (state === utterance) {
+      state = null;
+    }
+  };
+
   const scheduleNextWord = (utterance: UtteranceState): void => {
     if (
       utterance.frozen ||
+      utterance.paused ||
+      utterance.tickTimeoutId !== undefined ||
       utterance.visibleWordCount >= utterance.words.length
     ) {
       return;
     }
     utterance.tickTimeoutId = setTimeoutFn(() => {
+      utterance.tickTimeoutId = undefined;
       if (!state || state !== utterance || utterance.frozen) return;
+      if (utterance.paused) return;
       utterance.visibleWordCount += 1;
       upsertCurrent();
       scheduleNextWord(utterance);
+      finishStreamedIfComplete(utterance);
     }, utterance.intervalMs);
   };
 
@@ -159,6 +199,7 @@ export function createSpokenChatCaption(
     if (utterance.visibleWordCount < utterance.words.length) {
       scheduleNextWord(utterance);
     }
+    finishStreamedIfComplete(utterance);
   };
 
   const snapToFull = (utterance: UtteranceState): void => {
@@ -180,6 +221,31 @@ export function createSpokenChatCaption(
     }
   };
 
+  const updateStreamed = (
+    utterance: UtteranceState,
+    text: string,
+    partial: boolean,
+  ): void => {
+    if (utterance.frozen) return;
+    const words = splitWords(text);
+    const isPrefix =
+      utterance.words.length <= words.length &&
+      utterance.words.every((word, i) => word === words[i]);
+    utterance.words = words;
+    if (!partial) utterance.final = true;
+    if (!isPrefix) {
+      utterance.visibleWordCount = Math.min(
+        utterance.visibleWordCount,
+        words.length,
+      );
+      if (utterance.revealStarted) upsertCurrent();
+    }
+    if (utterance.revealStarted) {
+      scheduleNextWord(utterance);
+    }
+    finishStreamedIfComplete(utterance);
+  };
+
   const handleChatReply = (payload: Record<string, unknown>): void => {
     const text = typeof payload.text === "string" ? payload.text.trim() : "";
     if (!text) return;
@@ -193,10 +259,20 @@ export function createSpokenChatCaption(
         ? payload.durationMs
         : undefined;
     const streamExplicit = payload.stream === true;
+    const partial = payload.partial === true;
 
     if (!enabled) {
       resetUtteranceState();
       opts.onUpsert(utteranceId, text);
+      return;
+    }
+
+    if (state && state.utteranceId === utteranceId && state.streamed) {
+      updateStreamed(state, text, partial);
+      return;
+    }
+
+    if (!partial && completed.get(utteranceId) === splitWords(text).join(" ")) {
       return;
     }
 
@@ -229,11 +305,14 @@ export function createSpokenChatCaption(
       revealStarted: false,
       waitingForStart: true,
       streamExplicit,
+      streamed: partial,
+      final: !partial,
+      paused: false,
     };
 
     state.startTimeoutId = setTimeoutFn(() => {
       if (!state?.waitingForStart || state.revealStarted) return;
-      if (state.streamExplicit) {
+      if (state.streamExplicit || state.streamed) {
         startReveal(state);
       } else {
         snapToFull(state);
@@ -244,12 +323,29 @@ export function createSpokenChatCaption(
   const handleSpeechEvent = (payload: Record<string, unknown>): void => {
     const event = typeof payload.event === "string" ? payload.event : "";
     if (event === "agent_speaking_start") {
+      if (state?.streamed && !state.frozen) {
+        state.paused = false;
+        if (!state.revealStarted) {
+          startReveal(state);
+        } else {
+          scheduleNextWord(state);
+        }
+        return;
+      }
       if (state && (state.waitingForStart || !state.revealStarted)) {
         startReveal(state);
       }
       return;
     }
     if (event === "agent_speaking_end") {
+      if (state?.streamed) {
+        state.paused = true;
+        if (state.tickTimeoutId !== undefined) {
+          clearTimeoutFn(state.tickTimeoutId);
+          state.tickTimeoutId = undefined;
+        }
+        return;
+      }
       if (state) {
         clearUtteranceTimers(state);
         state.visibleWordCount = state.words.length;
