@@ -466,6 +466,30 @@ export function createSpokenChatCaption(
     emit(turn.turnId, turn.firstChunk);
   };
 
+  /**
+   * A claimed start (it came before this turn's first delta) begins pacing after a 400 ms grace,
+   * so a barge-in inside it still shows the first sentence.
+   */
+  const scheduleClaimedStart = (turn: SpokenTurn): void => {
+    const pending = state;
+    if (
+      !turn.audioStarted ||
+      turn.frozen ||
+      !pending ||
+      pending.utteranceId !== turn.turnId ||
+      pending.revealStarted ||
+      pending.frozen ||
+      pending.startTimeoutId !== undefined
+    ) {
+      return;
+    }
+    pending.startTimeoutId = setTimeoutFn(() => {
+      pending.startTimeoutId = undefined;
+      if (state !== pending || pending.revealStarted || pending.frozen) return;
+      startReveal(pending);
+    }, START_FALLBACK_MS);
+  };
+
   /** Spoken-turn bookkeeping for speech events; the caption's own pacing runs separately. */
   const trackSpokenSpeechEvent = (event: string): void => {
     if (event === "agent_speaking_start") {
@@ -612,6 +636,7 @@ export function createSpokenChatCaption(
         },
         true,
       );
+      scheduleClaimedStart(turn);
       return;
     }
 
@@ -649,7 +674,8 @@ export function createSpokenChatCaption(
       pending &&
       pending.utteranceId === turnId &&
       !pending.revealStarted &&
-      !pending.frozen
+      !pending.frozen &&
+      !turn.audioStarted
     ) {
       // Audio that never starts must not hide a completed reply forever.
       clearUtteranceTimers(pending);
@@ -659,6 +685,7 @@ export function createSpokenChatCaption(
         snapToFull(pending);
       }, SPOKEN_START_FALLBACK_MS);
     }
+    if (!stopped) scheduleClaimedStart(turn);
     // Nothing visible changed since the last emit but the turn is now final.
     if (
       !turn.finalReported &&

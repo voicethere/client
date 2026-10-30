@@ -526,12 +526,20 @@ describe("first sentence once audio started", () => {
     expect(getLines()).toEqual(["[agent] One two. Three."]);
   });
 
-  // Client timing: a spoken reveal starts at the turn's own agent_speaking_start after its first
-  // delta (no 400 ms fallback), so the start follows the delta here.
+  it("a start just before the turn's first delta paces it without a done", () => {
+    const { feed, getLines } = linesSetup();
+    feed(speech("agent_speaking_start"));
+    feed(delta("S", "One sentence only."));
+    vi.advanceTimersByTime(500);
+    expect(getLines()).toEqual(["[agent] One"]);
+    vi.advanceTimersByTime(600);
+    expect(getLines()).toEqual(["[agent] One sentence only."]);
+  });
+
   it("dispose while a finished turn is still pacing shows its full text", () => {
     const { feed, getLines, reveal, updates } = linesSetup();
-    feed(delta("P", "One two three four five six."));
     feed(speech("agent_speaking_start"));
+    feed(delta("P", "One two three four five six."));
     feed(done("P", "One two three four five six."));
     vi.advanceTimersByTime(660);
     expect(getLines()[0]!.length).toBeLessThan(
