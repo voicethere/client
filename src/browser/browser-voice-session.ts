@@ -5,6 +5,12 @@ import {
 
 import { appendJoinToken } from "../resolve-connection.js";
 import {
+  createAgentTextReveal,
+  type AgentTextReveal,
+  type AgentTextUpdate,
+  type SpokenTextRevealMode,
+} from "../spoken-text-reveal.js";
+import {
   createLocalSessionError,
   emitSessionError,
   isSessionErrorEvent,
@@ -243,6 +249,18 @@ export type BrowserVoiceSessionOptions = {
   onSessionError?: SessionErrorHandler;
   /** Fired for JSON messages on voice-control (e.g. speech_event). */
   onControlMessage?: (payload: Record<string, unknown>) => void;
+  /**
+   * How spoken agent text (`assistant_*` with `spoken: true`) is reported to {@link onAgentText}.
+   * `playback` (default) reveals it word by word while the agent speaks; `immediate` reports each
+   * sentence as soon as the agent hands it to speech.
+   */
+  spokenTextReveal?: SpokenTextRevealMode;
+  /**
+   * The only callback that reports agent text. One call per visible change, keyed by `turnId`;
+   * `text` is the whole turn so far. The typed turn's trailing `chat_reply` is not reported.
+   * `onControlMessage` still receives every raw message.
+   */
+  onAgentText?: (update: AgentTextUpdate) => void;
   /** Fired when the agent reports what it is doing (`agent_state` on voice-control). Older agents send none. */
   onAgentState?: (event: AgentStateEvent) => void;
   /** Fired when the caller cut the agent off (`agent_interrupted` on voice-control). Older agents send none. */
@@ -501,6 +519,13 @@ export async function connectBrowserVoiceSession(
       : null;
   const playbackAudioElement = options.audioElement ?? ownedAudioElement;
   let audioPlaybackState: AudioPlaybackState = "idle";
+  const agentTextReveal: AgentTextReveal | null = options.onAgentText
+    ? createAgentTextReveal({
+        mode: options.spokenTextReveal,
+        onAgentText: options.onAgentText,
+      })
+    : null;
+
   const disposeOwnedAudioElement = (): void => {
     if (!ownedAudioElement) return;
     try {
@@ -913,6 +938,7 @@ export async function connectBrowserVoiceSession(
         "remote_close",
         closeCode ?? closeReason ?? "unknown",
       );
+      agentTextReveal?.dispose();
       connectionState = "closed";
       if (connectionSnapshot.peerConnectionState !== "closed") {
         updateConnectionSnapshot({
@@ -924,6 +950,7 @@ export async function connectBrowserVoiceSession(
       return;
     }
     options.onControlMessage?.(message);
+    agentTextReveal?.handleControlMessage(message);
     dispatchAgentEvents(message);
   };
 
@@ -2765,6 +2792,7 @@ export async function connectBrowserVoiceSession(
         pc = null;
       }
       ws = null;
+      agentTextReveal?.dispose();
       disposeCurrentMic();
       disposeOwnedAudioElement();
       micRtpSender = null;
@@ -2869,6 +2897,7 @@ export async function connectBrowserVoiceSession(
         syncChannel = null;
         pc = null;
         ws = null;
+        agentTextReveal?.dispose();
         disposeCurrentMic();
         disposeOwnedAudioElement();
         micRtpSender = null;

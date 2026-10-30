@@ -30,6 +30,8 @@ const EXPECTED_EXPORTS: Record<string, string[]> = {
     "reportConnectionError",
     "resolveConnection",
     "setRootConnectionErrorHandler",
+    "createAgentTextReveal",
+    "createSpokenChatCaption",
   ],
   "./browser": [
     "BrowserSessionModeType",
@@ -90,6 +92,8 @@ const EXPECTED_EXPORTS: Record<string, string[]> = {
     "stopMicStream",
     "summarizeRtcStatsReport",
     "unlockAudioPlayback",
+    "createAgentTextReveal",
+    "createSpokenChatCaption",
   ],
   "./embed": [
     "DEFAULT_WIDGET_API_BASE",
@@ -122,6 +126,7 @@ const EXPECTED_EXPORTS: Record<string, string[]> = {
     "widgetBootstrapSessionCacheKey",
     "widgetKeyMapUrl",
     "widgetProjectBootstrapUrl",
+    "createAgentTextReveal",
   ],
   "./node": [
     "BrowserSessionModeType",
@@ -148,6 +153,8 @@ const EXPECTED_EXPORTS: Record<string, string[]> = {
     "isRetryableSessionApiStatus",
     "startSession",
     "summarizeRtcStatsReport",
+    "createAgentTextReveal",
+    "createSpokenChatCaption",
   ],
 };
 
@@ -278,26 +285,34 @@ describe("packed public surface", () => {
     }
   });
 
-  it("embed exposes createSpokenChatCaption", () => {
-    const out = execFileSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "-e",
-        `const m = await import(${JSON.stringify(`${pkg.name}/embed`)});
+  it.each([".", "./browser", "./embed", "./node"])(
+    "%s exposes a working createSpokenChatCaption and createAgentTextReveal",
+    (sub) => {
+      const out = execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `const m = await import(${JSON.stringify(specFor(sub))});
 const c = m.createSpokenChatCaption({ enabled: true, onUpsert() {} });
-console.log(JSON.stringify({ t: typeof m.createSpokenChatCaption, h: typeof c.handleControlMessage, s: typeof c.setEnabled, d: typeof c.dispose }));
-c.dispose();`,
-      ],
-      { cwd: tmp, encoding: "utf8" },
-    );
-    expect(JSON.parse(out.trim().split("\n").pop() as string)).toEqual({
-      t: "function",
-      h: "function",
-      s: "function",
-      d: "function",
-    });
-  });
+const seen = [];
+const r = m.createAgentTextReveal({ mode: "immediate", onAgentText: (u) => seen.push(u) });
+r.handleControlMessage({ type: "assistant_delta", turnId: "t", text: "Hi there.", spoken: true });
+console.log(JSON.stringify({ t: typeof m.createSpokenChatCaption, h: typeof c.handleControlMessage, s: typeof c.setEnabled, d: typeof c.dispose, seen }));
+c.dispose(); r.dispose();`,
+        ],
+        { cwd: tmp, encoding: "utf8" },
+      );
+      expect(JSON.parse(out.trim().split("\n").pop() as string)).toEqual({
+        t: "function",
+        h: "function",
+        s: "function",
+        d: "function",
+        seen: [{ turnId: "t", text: "Hi there.", spoken: true, final: false }],
+      });
+    },
+    120_000,
+  );
 
   it("expected public names", () => {
     expect(Object.keys(EXPECTED_EXPORTS).sort()).toEqual(

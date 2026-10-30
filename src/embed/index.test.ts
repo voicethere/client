@@ -1157,3 +1157,61 @@ describe("createVoiceThereWidget connection recovery", () => {
     expect(connectBtn.textContent).toBe("Connect");
   });
 });
+
+describe("createVoiceThereWidget spoken text reveal", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const connectAndGetHandler = async (extra: { streamSpokenText?: boolean }) => {
+    createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      mode: BrowserSessionModeType.Voice,
+      mount: mount as unknown as HTMLElement,
+      ...extra,
+    });
+    findButtonByText(mount, "Connect")!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    return (
+      connectBrowserSession.mock.calls[0]![0] as {
+        onControlMessage: (payload: Record<string, unknown>) => void;
+      }
+    ).onControlMessage;
+  };
+  const bubbleTexts = () =>
+    createdElements
+      .filter((el) => el.textContent.startsWith("One"))
+      .map((el) => el.textContent);
+
+  it("is on by default: a spoken turn is paced word by word", async () => {
+    const onControlMessage = await connectAndGetHandler({});
+    onControlMessage({
+      type: "assistant_delta",
+      turnId: "t1",
+      text: "One two three.",
+      spoken: true,
+    });
+    onControlMessage({ type: "speech_event", event: "agent_speaking_start" });
+    expect(bubbleTexts()).toEqual(["One"]);
+    await vi.advanceTimersByTimeAsync(330);
+    expect(bubbleTexts()).toEqual(["One two"]);
+  });
+
+  it("streamSpokenText: false keeps the old behaviour (no paced assistant_* line)", async () => {
+    const onControlMessage = await connectAndGetHandler({
+      streamSpokenText: false,
+    });
+    onControlMessage({
+      type: "assistant_delta",
+      turnId: "t1",
+      text: "One two three.",
+      spoken: true,
+    });
+    onControlMessage({ type: "speech_event", event: "agent_speaking_start" });
+    expect(bubbleTexts()).toEqual([]);
+  });
+});

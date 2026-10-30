@@ -36,7 +36,7 @@ import {
   getWidgetPreset,
   type ResolvedWidgetTheme,
 } from "./presets.js";
-import { createSpokenChatCaption } from "./spoken-chat-caption.js";
+import { createSpokenChatCaption } from "../spoken-text-reveal.js";
 
 export type {
   VoiceThereWidgetConfigV1,
@@ -81,10 +81,14 @@ export {
   WIDGET_KEY_HASH_FIXTURE_RAW,
 } from "./widget-key-hash.js";
 export {
+  createAgentTextReveal,
   createSpokenChatCaption,
+  type AgentTextReveal,
+  type AgentTextUpdate,
   type SpokenChatCaption,
   type SpokenChatCaptionOptions,
-} from "./spoken-chat-caption.js";
+  type SpokenTextRevealMode,
+} from "../spoken-text-reveal.js";
 
 export type VoiceThereWidgetOptions = {
   clientKey: string;
@@ -164,7 +168,7 @@ function mergeWidgetOptions(
     positionOffset: inline.positionOffset ?? remote?.positionOffset,
     customCss: inline.customCss ?? remote?.customCss,
     streamSpokenText:
-      inline.streamSpokenText ?? remote?.streamSpokenText ?? false,
+      inline.streamSpokenText ?? remote?.streamSpokenText ?? true,
   };
 }
 

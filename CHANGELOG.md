@@ -1,6 +1,16 @@
 # Changelog
 
-## [Unreleased]
+## [0.17.0] - 2026-10-30
+
+### Added
+
+- Spoken text reveal for voice sessions. New session options `onAgentText` and `spokenTextReveal` (`"playback"` default, or `"immediate"`) on `connectBrowserSession`, `connectBrowserVoiceSession` and the `./node` entry. Spoken `assistant_delta` / `assistant_done` messages (`spoken: true`, paired by `turnId`) are revealed word by word while the agent speaks, with `final` and `inReplyTo` on each update. Typed turns are reported at once and the `chat_reply` that follows is not reported twice. The reveal and its timers are disposed when the session closes.
+- `createSpokenChatCaption` handles spoken `assistant_delta` / `assistant_done` natively, and `createAgentTextReveal` is exported from `.`, `./browser`, `./embed` and `./node`. The caption module moved to `src/spoken-text-reveal.ts`; `@voicethere/client/embed` keeps exporting it.
+
+### Changed
+
+- The embed widget shows spoken agent text with the reveal by default: `streamSpokenText` now defaults to `true`. Pass `streamSpokenText: false` for the old behaviour.
+
 
 ### Fixed
 

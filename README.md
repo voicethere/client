@@ -217,6 +217,26 @@ await connectBrowserSession({
 
 Agents send these events with `@voicethere/agent` 0.11+ on current runners. Older agents send none, so the callbacks simply never fire. `onControlMessage` still receives the raw payloads.
 
+## Spoken text reveal
+
+When the agent speaks, its text arrives as `assistant_delta` (one per sentence, `spoken: true`) and `assistant_done` messages, sent before the audio is heard. Pass `onAgentText` and the session reveals that text word by word while the agent talks, instead of showing every sentence the moment it is sent.
+
+```ts
+const session = await connectBrowserSession({
+  credentials,
+  onAgentText: ({ turnId, text, spoken, final, inReplyTo }) => {
+    // `text` is the whole turn so far. Replace the line for `turnId`.
+    renderAgentLine(turnId, text);
+  },
+});
+```
+
+- `onAgentText` is called once per visible change. `text` is the full turn so far, keyed by `turnId`; `final` is `true` on the last update of a turn.
+- `spokenTextReveal` is `"playback"` by default: the reveal follows `agent_speaking_start` / `agent_speaking_end`, pauses between spoken chunks, and stops at what was heard on `barge_in` or when `assistant_done` has `status` other than `completed`. Set `spokenTextReveal: "immediate"` to get each sentence at once.
+- Typed turns (`assistant_delta` / `assistant_done` without `spoken`) are reported at once with `spoken: false`. The `chat_reply` that follows them repeats the same text and is not reported.
+- `onControlMessage` still receives every raw message.
+- The embed widget uses the same reveal and has `streamSpokenText` on by default; pass `streamSpokenText: false` to turn it off.
+
 ## Embed widget customization
 
 Import from `@voicethere/client/embed`. For production snippets, pass only a **client API key** (`vthc_…`) to `createVoiceThereWidgetAsync({ clientKey })`; the client fetches bootstrap JSON from the CDN (project id, session API base, and optional published appearance). Staging pages can pass `apiBase: "https://sessions.voicethere.dev/v1"` so the client uses the staging CDN. Legacy integrations may still pass `configUrl` (stable `config.json`) or inline `projectId` / `apiBase`.
