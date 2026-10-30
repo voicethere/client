@@ -121,7 +121,10 @@ export type {
   ReconnectPolicy,
   VoiceSessionReconnectInfo,
 } from "./browser-voice-session.js";
-export { connectBrowserChatSession } from "./browser-chat-session.js";
+export {
+  connectBrowserChatSession,
+  VOICETHERE_CHAT_CHANNEL_LABEL,
+} from "./browser-chat-session.js";
 export {
   CLIENT_HANGUP_MESSAGE_TYPE,
   connectBrowserVoiceSession,

@@ -16,56 +16,202 @@ const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {
   exports: Record<string, unknown>;
 };
 
-/** Names that must stay importable per subpath. Extra names are allowed. */
+/** Names that must stay importable per subpath (generated from the packed build, sorted). Extra names are allowed. */
 const EXPECTED_EXPORTS: Record<string, string[]> = {
-  ".": [],
-  "./browser": [],
+  ".": [
+    "ConnectionError",
+    "appendJoinToken",
+    "connectVoiceSession",
+    "createConnectionError",
+    "formatConnectionErrorSource",
+    "getRootConnectionErrorHandler",
+    "parseAgentInterruptedEvent",
+    "parseAgentStateEvent",
+    "reportConnectionError",
+    "resolveConnection",
+    "setRootConnectionErrorHandler",
+  ],
+  "./browser": [
+    "BrowserSessionModeType",
+    "CLIENT_CAPABILITIES",
+    "CLIENT_HANGUP_MESSAGE_TYPE",
+    "CONNECTION_INTERRUPTED_MESSAGE",
+    "CONNECTION_LOST_MESSAGE",
+    "CONNECTION_RESTORED_MESSAGE",
+    "CONNECTION_SESSION_ENDED_MESSAGE",
+    "ConnectionError",
+    "CustomerContextTooLargeError",
+    "DEFAULT_SESSION_API_RETRY_DELAYS_MS",
+    "LOCAL_SESSION_ERROR_CODES",
+    "MAX_CUSTOMER_CONTEXT_BYTES",
+    "ProvisionedRunnerModeType",
+    "REMOTE_SESSION_ERROR_CODES",
+    "SESSION_ERROR_CODES",
+    "VOICETHERE_CHAT_CHANNEL_LABEL",
+    "VOICE_CONTROL_CHANNEL_LABEL",
+    "VOICE_SYNC_CHANNEL_LABEL",
+    "acquireAudioInput",
+    "attachAudioVisualizer",
+    "buildWebRtcConnectionStatus",
+    "closePeerConnectionAwaitable",
+    "collectWebRtcDiagnostics",
+    "connectBrowserChatSession",
+    "connectBrowserSession",
+    "connectBrowserVoiceSession",
+    "connectDataSession",
+    "createConnectionError",
+    "createDebugConsole",
+    "createHiddenAudioElement",
+    "createLocalSessionError",
+    "createSyntheticMicStream",
+    "deriveWebRtcConnectionPhase",
+    "emitSessionError",
+    "fetchSessionApi",
+    "formatConnectionErrorSource",
+    "formatIceTriageLine",
+    "formatWebRtcDiagnosticsLines",
+    "getDefaultBrowserRuntime",
+    "getRootConnectionErrorHandler",
+    "isRetryableSessionApiBody",
+    "isRetryableSessionApiFailure",
+    "isRetryableSessionApiNetworkError",
+    "isRetryableSessionApiStatus",
+    "isSessionErrorEvent",
+    "isWebRtcConnectionReady",
+    "listAudioInputDevices",
+    "parseAgentInterruptedEvent",
+    "parseAgentStateEvent",
+    "peerConnectionSupportsCloseAsync",
+    "redactDiagnosticDetail",
+    "reportConnectionError",
+    "resolveReadinessProfile",
+    "setRootConnectionErrorHandler",
+    "startSession",
+    "stopMicStream",
+    "summarizeRtcStatsReport",
+    "unlockAudioPlayback",
+  ],
   "./embed": [
-    "createVoiceThereWidget",
-    "createVoiceThereWidgetAsync",
-    "createSpokenChatCaption",
-    "fetchVoiceThereWidgetConfig",
-    "parseVoiceThereWidgetConfigV1",
-    "parseVoiceThereWidgetConfigJson",
-    "WidgetConfigError",
-    "WIDGET_CONFIG_VERSION",
-    "WIDGET_POSITIONS",
-    "WIDGET_PRESET_IDS",
-    "applyPreset",
-    "getWidgetPreset",
-    "WIDGET_CSS_CLASSES",
-    "WIDGET_CSS_VARIABLES",
-    "bootstrapIdentityFromDocument",
-    "fetchWidgetBootstrapByClientKey",
-    "parseWidgetBootstrapDocument",
-    "parseWidgetBootstrapJson",
-    "WidgetBootstrapError",
-    "WIDGET_BOOTSTRAP_SESSION_CACHE_MS",
-    "widgetBootstrapSessionCacheKey",
     "DEFAULT_WIDGET_API_BASE",
     "DEFAULT_WIDGET_CDN_BASE",
+    "WIDGET_BOOTSTRAP_SESSION_CACHE_MS",
+    "WIDGET_CONFIG_VERSION",
+    "WIDGET_CSS_CLASSES",
+    "WIDGET_CSS_VARIABLES",
+    "WIDGET_KEY_HASH_FIXTURE_HEX",
+    "WIDGET_KEY_HASH_FIXTURE_RAW",
+    "WIDGET_POSITIONS",
+    "WIDGET_PRESET_IDS",
+    "WidgetBootstrapError",
+    "WidgetConfigError",
+    "applyPreset",
+    "bootstrapIdentityFromDocument",
+    "createSpokenChatCaption",
+    "createVoiceThereWidget",
+    "createVoiceThereWidgetAsync",
+    "fetchVoiceThereWidgetConfig",
+    "fetchWidgetBootstrapByClientKey",
+    "getWidgetPreset",
+    "parseVoiceThereWidgetConfigJson",
+    "parseVoiceThereWidgetConfigV1",
+    "parseWidgetBootstrapDocument",
+    "parseWidgetBootstrapJson",
     "resolveWidgetCdnBase",
+    "sha256HexUtf8",
     "widgetBootstrapCdnUrl",
+    "widgetBootstrapSessionCacheKey",
     "widgetKeyMapUrl",
     "widgetProjectBootstrapUrl",
-    "sha256HexUtf8",
   ],
-  "./node": [],
+  "./node": [
+    "BrowserSessionModeType",
+    "CLIENT_CAPABILITIES",
+    "CustomerContextTooLargeError",
+    "DEFAULT_SESSION_API_RETRY_DELAYS_MS",
+    "MAX_CUSTOMER_CONTEXT_BYTES",
+    "NodeWebSocketAdapter",
+    "ProvisionedRunnerModeType",
+    "VOICE_CONTROL_CHANNEL_LABEL",
+    "VOICE_SYNC_CHANNEL_LABEL",
+    "collectWebRtcDiagnostics",
+    "connectBrowserChatSession",
+    "connectBrowserSession",
+    "connectBrowserVoiceSession",
+    "connectDataSession",
+    "createNodeWebRtcRuntime",
+    "fetchSessionApi",
+    "formatIceTriageLine",
+    "formatWebRtcDiagnosticsLines",
+    "isRetryableSessionApiBody",
+    "isRetryableSessionApiFailure",
+    "isRetryableSessionApiNetworkError",
+    "isRetryableSessionApiStatus",
+    "startSession",
+    "summarizeRtcStatsReport",
+  ],
 };
 
-/** Exported from an embed module but deliberately not part of the public surface. */
-const EMBED_INTERNAL: Record<string, string> = {
-  clearWidgetKeyPointer: "widget-internal cache cleanup",
-  isWidgetPresetId: "widget-internal config validation helper",
-  isValidCssLength: "widget-internal config validation helper",
-  widgetConfigModeToSessionMode: "widget-internal mode mapping",
-  resolveWidgetTheme: "widget-internal theme resolution",
-  applyWidgetPosition: "widget-internal DOM positioning",
-  WIDGET_CUSTOM_STYLE_ATTR: "widget-internal DOM attribute name",
-  isValidWidgetPublicId: "widget-internal id check",
-  STAGING_WIDGET_CDN_BASE: "internal staging host",
-  WIDGET_KEY_HASH_FIXTURE_RAW: "test fixture",
-  WIDGET_KEY_HASH_FIXTURE_HEX: "test fixture",
+/** Exported from a module but deliberately not part of any public subpath. name -> reason. */
+const INTERNAL: Record<string, string> = {
+  parseLegacyAgentError: "used by browser-voice-session.ts",
+  emitDiagnosticSafely: "used by browser-voice-session.ts",
+  isWebRtcConnectRetryError: "used by browser-voice-session.ts",
+  isHalfOpenConnection: "used by browser-voice-session.ts",
+  resolveHalfOpenFailFastMs: "used by browser-voice-session.ts",
+  formatWebRtcConnectTimeoutMessage: "used by browser-voice-session.ts",
+  preferOpusStereoInAnswer: "used by browser-voice-session.ts",
+  waitForIceGatheringComplete: "used by browser-voice-session.ts",
+  mapProvisioningFailureCode:
+    "used by session-provision.ts and session-provision-poll.ts",
+  dispatchConnectionError:
+    "used by browser-voice-session.ts and node-websocket.ts",
+  SYNTHETIC_MIC_NOISE_GAIN:
+    "used inside microphone.ts (mic constraints and synthetic mic)",
+  buildAudioConstraints:
+    "used inside microphone.ts (mic constraints and synthetic mic)",
+  getStreamDeviceId: "unused inside the package; candidate for removal",
+  isTerminalSessionJobStatus:
+    "unused inside the package; candidate for removal",
+  isCapacityWaitStatus: "unused inside the package; candidate for removal",
+  resolvePostSessions429FailureCode:
+    "used inside session-provision.ts for 429 handling",
+  diagnosticErrorCode: "used inside voice-session-diagnostics.ts",
+  DEFAULT_HALF_OPEN_FAIL_FAST_MS: "used inside webrtc-connection-status.ts",
+  usesHalfOpenFailFast: "used inside webrtc-connection-status.ts",
+  drawIdleVisualizer: "drawn by attachAudioVisualizer; not a standalone API",
+  SESSION_POLL_BACKOFF_MULTIPLIERS:
+    "used inside session-provision-poll.ts (status polling backoff)",
+  SESSION_POLL_INTERVAL_CAP_MS:
+    "used inside session-provision-poll.ts (status polling backoff)",
+  SESSION_POLL_RETRY_AFTER_MIN_MS:
+    "used inside session-provision-poll.ts (status polling backoff)",
+  SESSION_POLL_RETRY_AFTER_MAX_MS:
+    "used inside session-provision-poll.ts (status polling backoff)",
+  defaultSessionPollRuntime:
+    "used inside session-provision-poll.ts (status polling backoff)",
+  clampSessionPollRetryAfterMs:
+    "used inside session-provision-poll.ts (status polling backoff)",
+  shouldResetSessionPollBackoff:
+    "used inside session-provision-poll.ts (status polling backoff)",
+  computeSessionPollDelayMs:
+    "used inside session-provision-poll.ts (status polling backoff)",
+  pollSessionStatus: "used by session-provision.ts",
+  remoteOfferHasIceUfrag: "used inside browser-voice-session.ts",
+  toSessionDescriptionInit: "used inside browser-voice-session.ts",
+  DEFAULT_RECONNECT_BUDGET_MS: "used inside browser-voice-session.ts",
+  DEFAULT_REJOIN_AFTER_DISCONNECTED_MS: "used inside browser-voice-session.ts",
+  RECONNECT_INFLIGHT_GRACE_MS: "used inside browser-voice-session.ts",
+  VOICE_AGENT_SERVER_PEER_ID: "used inside browser-voice-session.ts",
+  WIDGET_CUSTOM_STYLE_ATTR: "used by embed/index.ts (widget internals)",
+  applyWidgetPosition: "used by embed/index.ts (widget internals)",
+  widgetConfigModeToSessionMode: "used by embed/index.ts (widget internals)",
+  clearWidgetKeyPointer: "used by embed/index.ts (widget internals)",
+  STAGING_WIDGET_CDN_BASE:
+    "used inside embed/hosts.ts (staging host resolution)",
+  isValidWidgetPublicId: "used by embed/bootstrap.ts",
+  resolveWidgetTheme: "used inside embed/presets.ts",
+  isWidgetPresetId: "used inside embed/config.ts validation",
+  isValidCssLength: "used inside embed/config.ts validation",
 };
 
 let tmp = "";
@@ -167,26 +313,42 @@ c.dispose();`,
     }
   });
 
-  it("embed modules are re-exported", () => {
-    const dir = join(ROOT, "src", "embed");
-    const runtime = new Set(keysBySub["./embed"] ?? []);
+  it("all modules are re-exported", () => {
+    const entries = new Set([
+      "index.ts",
+      "browser/browser-session.ts",
+      "node/index.ts",
+      "embed/index.ts",
+    ]);
+    const allRuntime = new Set(Object.values(keysBySub).flat());
     const missing: string[] = [];
-    for (const f of readdirSync(dir)) {
-      if (!f.endsWith(".ts") || f.endsWith(".test.ts") || f === "index.ts")
-        continue;
-      const src = readFileSync(join(dir, f), "utf8");
-      for (const m of src.matchAll(
-        /^export (?:async )?function (\w+)|^export const (\w+)/gm,
-      )) {
-        const name = (m[1] ?? m[2])!;
-        if (!runtime.has(name) && !(name in EMBED_INTERNAL)) {
-          missing.push(`${f}: ${name}`);
+    for (const rel of ["", "browser", "node", "embed"]) {
+      const dir = join(ROOT, "src", rel);
+      for (const f of readdirSync(dir)) {
+        const relFile = rel ? `${rel}/${f}` : f;
+        if (
+          !f.endsWith(".ts") ||
+          f.endsWith(".test.ts") ||
+          entries.has(relFile)
+        )
+          continue;
+        const src = readFileSync(join(dir, f), "utf8");
+        for (const m of src.matchAll(
+          /^export (?:async )?function (\w+)|^export const (\w+)/gm,
+        )) {
+          const name = (m[1] ?? m[2])!;
+          if (!allRuntime.has(name) && !(name in INTERNAL))
+            missing.push(`${f}: ${name}`);
         }
       }
     }
     expect(
       missing,
-      `not re-exported from ${pkg.name}/embed and not in EMBED_INTERNAL`,
+      "not re-exported from any subpath and not in INTERNAL",
+    ).toEqual([]);
+    expect(
+      Object.keys(INTERNAL).filter((n) => allRuntime.has(n)),
+      "allowlisted but public",
     ).toEqual([]);
   });
 });
