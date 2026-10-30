@@ -5,6 +5,13 @@ const START_FALLBACK_MS = 400;
  */
 const SPOKEN_START_FALLBACK_MS = 5000;
 const DEFAULT_MS_PER_WORD = 330;
+/**
+ * speech_event carries no turnId, and the agent sends each sentence's assistant_delta before
+ * its speak, so a turn's first delta trails its own audio start only by transport skew. A cut
+ * start (agent_speaking_start then barge_in) not claimed by a turn within this window belonged
+ * to an earlier turn.
+ */
+const UNCLAIMED_CUT_MS = 1500;
 const COMPLETED_IDS_MAX = 32;
 
 /** Passed as third `onUpsert` argument for spoken `assistant_*` turns only. */
@@ -59,6 +66,10 @@ type SpokenTurn = {
   frozen: boolean;
   lastEmitted: string;
   finalReported: boolean;
+  /** First delta (first spoken sentence): the minimum line once audio started. */
+  firstChunk: string;
+  /** An agent_speaking_start belongs to this turn. */
+  audioStarted: boolean;
 };
 
 export type SpokenChatCaption = {
@@ -140,6 +151,13 @@ export function createSpokenChatCaption(
   // The caption follows one utterance at a time: a new turnId drops the previous state and
   // leaves its line at a prefix. A finished, unfrozen turn is settled to its full text first.
   let currentSpoken: SpokenTurn | null = null;
+  // agent_speaking_start seen while no unfinished spoken turn was current: its audio belongs to
+  // the next turn (the start can arrive before that turn's first delta).
+  let unclaimedStart = false;
+  // A barge_in landed while that start was unclaimed: the turn that claims it is already cut
+  // off, so it is frozen from its first delta.
+  let unclaimedBargeIn = false;
+  let unclaimedCutTimer: ReturnType<typeof setTimeout> | undefined;
 
   /** Single send path for every visible change; spoken turns carry `info`. */
   const emit = (utteranceId: string, visibleText: string): void => {
@@ -436,15 +454,79 @@ export function createSpokenChatCaption(
     }
   };
 
+  const clearUnclaimedCutTimer = (): void => {
+    if (unclaimedCutTimer === undefined) return;
+    clearTimeoutFn(unclaimedCutTimer);
+    unclaimedCutTimer = undefined;
+  };
+
+  /** A turn whose audio started never ends without a line: show its first sentence. */
+  const commitRevealed = (turn: SpokenTurn): void => {
+    if (turn.lastEmitted || !turn.audioStarted || !turn.firstChunk) return;
+    emit(turn.turnId, turn.firstChunk);
+  };
+
+  /** Spoken-turn bookkeeping for speech events; the caption's own pacing runs separately. */
+  const trackSpokenSpeechEvent = (event: string): void => {
+    if (event === "agent_speaking_start") {
+      const current = currentSpoken;
+      const waitingForStart =
+        current !== null &&
+        state !== null &&
+        state.utteranceId === current.turnId &&
+        !state.revealStarted &&
+        !state.frozen;
+      if (current && (!current.done || waitingForStart)) {
+        current.audioStarted = true;
+      } else {
+        clearUnclaimedCutTimer();
+        unclaimedBargeIn = false;
+        unclaimedStart = true;
+      }
+      return;
+    }
+    if (event === "agent_speaking_end") {
+      // An end right after a barge_in is the cut-off playback of the same, unclaimed turn.
+      if (!unclaimedBargeIn) unclaimedStart = false;
+      return;
+    }
+    if (event === "barge_in") {
+      if (currentSpoken) commitRevealed(currentSpoken);
+      if (unclaimedStart) {
+        unclaimedBargeIn = true;
+        clearUnclaimedCutTimer();
+        unclaimedCutTimer = setTimeoutFn(() => {
+          unclaimedCutTimer = undefined;
+          unclaimedStart = false;
+          unclaimedBargeIn = false;
+        }, UNCLAIMED_CUT_MS);
+      }
+    }
+  };
+
+  /** Makes `turn` the current spoken turn; it claims an unclaimed audio start. */
+  const claimSpoken = (turn: SpokenTurn): void => {
+    if (currentSpoken !== turn) {
+      currentSpoken = turn;
+      if (unclaimedStart) {
+        turn.audioStarted = true;
+        if (unclaimedBargeIn) turn.frozen = true;
+      }
+    }
+    unclaimedStart = false;
+    unclaimedBargeIn = false;
+    clearUnclaimedCutTimer();
+  };
+
   const settleOtherSpoken = (turnId: string): void => {
     const previous = currentSpoken;
     if (!previous || previous.turnId === turnId) return;
-    if (
-      previous.done &&
-      !previous.frozen &&
-      previous.lastEmitted !== previous.text
-    ) {
-      emit(previous.turnId, previous.text);
+    if (previous.done && !previous.frozen) {
+      if (previous.lastEmitted !== previous.text) {
+        emit(previous.turnId, previous.text);
+      }
+    } else {
+      commitRevealed(previous);
     }
     currentSpoken = null;
   };
@@ -465,6 +547,8 @@ export function createSpokenChatCaption(
         frozen: false,
         lastEmitted: "",
         finalReported: false,
+        firstChunk: "",
+        audioStarted: false,
       };
       spokenTurns.set(turnId, turn);
       while (spokenTurns.size > COMPLETED_IDS_MAX) {
@@ -511,7 +595,13 @@ export function createSpokenChatCaption(
         return;
       }
       settleOtherSpoken(turnId);
-      currentSpoken = turn;
+      claimSpoken(turn);
+      if (!turn.firstChunk) turn.firstChunk = chunk;
+      if (turn.frozen) {
+        // Cut off before this delta: only the first sentence is shown.
+        commitRevealed(turn);
+        return;
+      }
       handleChatReply(
         {
           type: "chat_reply",
@@ -536,9 +626,11 @@ export function createSpokenChatCaption(
       return;
     }
     settleOtherSpoken(turnId);
-    currentSpoken = turn;
+    claimSpoken(turn);
+    if (!turn.firstChunk) turn.firstChunk = turn.text;
+    const wasFrozen = turn.frozen;
     if (stopped) turn.frozen = true;
-    if (turn.text) {
+    if (turn.text && !wasFrozen) {
       handleChatReply(
         {
           type: "chat_reply",
@@ -550,6 +642,7 @@ export function createSpokenChatCaption(
       );
     }
     if (stopped) handleSpeechEvent({ event: "barge_in" });
+    if (turn.frozen) commitRevealed(turn);
     const pending = state;
     if (
       !stopped &&
@@ -593,7 +686,10 @@ export function createSpokenChatCaption(
     }
     if (type === "speech_event") {
       if (enabled) {
+        const event = typeof payload.event === "string" ? payload.event : "";
+        if (event !== "barge_in") trackSpokenSpeechEvent(event);
         handleSpeechEvent(payload);
+        if (event === "barge_in") trackSpokenSpeechEvent(event);
         return;
       }
     }
@@ -608,9 +704,24 @@ export function createSpokenChatCaption(
   };
 
   const dispose = (): void => {
+    // Disconnect or reconnect: a finished turn still pacing shows its full text, and a turn
+    // whose audio started keeps at least its first sentence.
+    const current = currentSpoken;
+    if (current && !current.frozen) {
+      if (current.done) {
+        if (current.lastEmitted !== current.text) {
+          emit(current.turnId, current.text);
+        }
+      } else {
+        commitRevealed(current);
+      }
+    }
     resetUtteranceState();
     spokenTurns.clear();
     currentSpoken = null;
+    unclaimedStart = false;
+    unclaimedBargeIn = false;
+    clearUnclaimedCutTimer();
   };
 
   return {

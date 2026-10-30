@@ -289,6 +289,29 @@ describe.each<RuntimeShape>(["browser", "node"])(
       expect(vi.getTimerCount()).toBe(0);
     });
 
+    it("a barge-in before the first word still reports the turn's first sentence", async () => {
+      const updates: AgentTextUpdate[] = [];
+      const { send } = await connect({ onAgentText: (u) => updates.push(u) });
+      send(speech("agent_speaking_start"));
+      send(spoken("B", "Sure, here it is."));
+      send(speech("barge_in"));
+      send({
+        type: "assistant_done",
+        turnId: "B",
+        text: "Sure, here it is. More text follows.",
+        spoken: true,
+        status: "interrupted",
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(updates.at(-1)).toEqual({
+        turnId: "B",
+        text: "Sure, here it is.",
+        spoken: true,
+        final: true,
+      });
+      expect(updates.every((u) => u.text === "Sure, here it is.")).toBe(true);
+    });
+
     it("without onAgentText nothing is revealed and no timers are started", async () => {
       const { send } = await connect({});
       send(spoken("A", "One two three."));
