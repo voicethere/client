@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `createSpokenChatCaption` is now exported from `@voicethere/client/embed`. It shipped in the package but could not be imported. A new test packs the package and checks the public surface of every `exports` subpath.
+
 ## [0.15.0] - 2026-10-28
 
 ### Added

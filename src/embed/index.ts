@@ -80,6 +80,11 @@ export {
   WIDGET_KEY_HASH_FIXTURE_HEX,
   WIDGET_KEY_HASH_FIXTURE_RAW,
 } from "./widget-key-hash.js";
+export {
+  createSpokenChatCaption,
+  type SpokenChatCaption,
+  type SpokenChatCaptionOptions,
+} from "./spoken-chat-caption.js";
 
 export type VoiceThereWidgetOptions = {
   clientKey: string;
