@@ -68,6 +68,9 @@ jobs:
       - name: Release script tests
         run: bash scripts/ci/wait-for-npm-package.test.sh
 
+      - name: Check CHANGELOG entry script tests
+        run: bash scripts/ci/check-changelog-entry.test.sh
+
       - name: Typecheck, test, and build
         run: npm run test:ci
 
