@@ -232,7 +232,12 @@ export function createSpokenChatCaption(
       utterance.words.length <= words.length &&
       utterance.words.every((word, i) => word === words[i]);
     utterance.words = words;
-    if (!partial) utterance.final = true;
+    if (!partial) {
+      utterance.final = true;
+      // Once final, the line is never paused: assistant_done can arrive after
+      // the last chunk's agent_speaking_end.
+      utterance.paused = false;
+    }
     if (!isPrefix) {
       utterance.visibleWordCount = Math.min(
         utterance.visibleWordCount,
@@ -272,7 +277,7 @@ export function createSpokenChatCaption(
       return;
     }
 
-    if (!partial && completed.get(utteranceId) === splitWords(text).join(" ")) {
+    if (completed.get(utteranceId) === splitWords(text).join(" ")) {
       return;
     }
 
@@ -339,6 +344,7 @@ export function createSpokenChatCaption(
     }
     if (event === "agent_speaking_end") {
       if (state?.streamed) {
+        if (state.final) return;
         state.paused = true;
         if (state.tickTimeoutId !== undefined) {
           clearTimeoutFn(state.tickTimeoutId);
