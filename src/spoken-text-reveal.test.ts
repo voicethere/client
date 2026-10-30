@@ -1,8 +1,22 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  expectTypeOf,
+  it,
+  vi,
+} from "vitest";
 
+import type { SpokenTurnUpsertInfo as BrowserInfo } from "./browser/browser-session.js";
+import type { SpokenTurnUpsertInfo as EmbedInfo } from "./embed/index.js";
+import type { SpokenTurnUpsertInfo as RootInfo } from "./index.js";
+import type { SpokenTurnUpsertInfo as NodeInfo } from "./node/index.js";
 import {
   createAgentTextReveal,
+  createSpokenChatCaption,
   type AgentTextUpdate,
+  type SpokenTurnUpsertInfo,
   type SpokenTextRevealMode,
 } from "./spoken-text-reveal.js";
 
@@ -151,6 +165,7 @@ describe("createAgentTextReveal (spoken turns, playback)", () => {
     reveal.handleControlMessage(speech("barge_in"));
     reveal.handleControlMessage(done("G", "Alpha beta gamma.", "interrupted"));
     reveal.handleControlMessage(delta("H", "Delta."));
+    reveal.handleControlMessage(speech("agent_speaking_start"));
     vi.advanceTimersByTime(5_000);
     expect(lastText("G")).toBe("Alpha");
     expect(lastText("H")).toBe("Delta.");
@@ -235,5 +250,143 @@ describe("createAgentTextReveal (typed turns)", () => {
     reveal.handleControlMessage({ type: "assistant_delta", text: "x" });
     reveal.handleControlMessage({ type: "chat_reply", text: "x" });
     expect(updates).toEqual([]);
+  });
+});
+
+describe("spoken turns never reveal before audio", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("(a)+(b) a spoken delta shows nothing without a start, then words begin at the start", () => {
+    const { reveal, updates, lastText } = setup();
+    reveal.handleControlMessage(delta("A", "One two three."));
+    vi.advanceTimersByTime(4_900);
+    expect(updates).toEqual([]);
+    reveal.handleControlMessage(speech("agent_speaking_start"));
+    expect(lastText("A")).toBe("One");
+  });
+
+  it("(c) a completed done without any start shows the full text as final after 5000 ms", () => {
+    const { reveal, updates } = setup();
+    reveal.handleControlMessage(delta("A", "One two three."));
+    reveal.handleControlMessage(done("A", "One two three."));
+    vi.advanceTimersByTime(4_999);
+    expect(updates).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(updates).toEqual([
+      { turnId: "A", text: "One two three.", spoken: true, final: true },
+    ]);
+  });
+
+  it("(c2) a start before the 5000 ms bound cancels the fallback and paces instead", () => {
+    const { reveal, updates } = setup();
+    reveal.handleControlMessage(done("A", "One two three."));
+    vi.advanceTimersByTime(2_000);
+    reveal.handleControlMessage(speech("agent_speaking_start"));
+    expect(updates.map((u) => u.text)).toEqual(["One"]);
+    vi.advanceTimersByTime(330);
+    expect(updates.at(-1)!.text).toBe("One two");
+  });
+
+  it("(d) an interrupted done before any start emits nothing", () => {
+    const { reveal, updates } = setup();
+    reveal.handleControlMessage(delta("A", "One two three."));
+    reveal.handleControlMessage(done("A", "One two three.", "interrupted"));
+    vi.advanceTimersByTime(20_000);
+    expect(updates).toEqual([]);
+  });
+});
+
+describe("a late message for an earlier turn", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("settles only its own line and does not reset the current turn", () => {
+    const { reveal, updates, lastText } = setup();
+    reveal.handleControlMessage(delta("A", "One two three four."));
+    reveal.handleControlMessage(speech("agent_speaking_start"));
+    expect(lastText("A")).toBe("One");
+    reveal.handleControlMessage(speech("barge_in"));
+    reveal.handleControlMessage(delta("B", "One two three four."));
+    reveal.handleControlMessage(speech("agent_speaking_start"));
+    expect(lastText("B")).toBe("One");
+    reveal.handleControlMessage(
+      done("A", "One two three four.", "interrupted"),
+    );
+    const forA = updates.filter((u) => u.turnId === "A");
+    expect(forA.at(-1)).toEqual({
+      turnId: "A",
+      text: "One",
+      spoken: true,
+      final: true,
+    });
+    expect(forA.filter((u) => u.final)).toHaveLength(1);
+    expect(lastText("B")).toBe("One");
+    vi.advanceTimersByTime(330);
+    expect(lastText("B")).toBe("One two");
+    expect(updates.filter((u) => u.turnId === "B").map((u) => u.text)).toEqual([
+      "One",
+      "One two",
+    ]);
+  });
+
+  it("a late completed done emits the full text as final for its own turn", () => {
+    const { reveal, updates, lastText } = setup();
+    reveal.handleControlMessage(delta("A", "Alpha beta."));
+    reveal.handleControlMessage(delta("B", "Gamma."));
+    reveal.handleControlMessage(done("A", "Alpha beta."));
+    expect(updates.at(-1)).toEqual({
+      turnId: "A",
+      text: "Alpha beta.",
+      spoken: true,
+      final: true,
+    });
+    expect(lastText("B")).toBeUndefined();
+  });
+});
+
+describe("paceChatReply", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("false: chat_reply is shown at once while spoken turns are still paced", () => {
+    const upserts: Array<[string, string]> = [];
+    const caption = createSpokenChatCaption({
+      enabled: true,
+      paceChatReply: false,
+      onUpsert: (id, text) => upserts.push([id, text]),
+    });
+    caption.handleControlMessage({ type: "chat_reply", text: "One two three" });
+    expect(upserts).toHaveLength(1);
+    expect(upserts[0]![1]).toBe("One two three");
+    caption.handleControlMessage(delta("S", "Four five six."));
+    caption.handleControlMessage(speech("agent_speaking_start"));
+    expect(upserts.at(-1)).toEqual(["S", "Four"]);
+    caption.dispose();
+  });
+});
+
+describe("SpokenTurnUpsertInfo", () => {
+  it("is exported with the same shape from every entry", () => {
+    expectTypeOf<RootInfo>().toEqualTypeOf<SpokenTurnUpsertInfo>();
+    expectTypeOf<BrowserInfo>().toEqualTypeOf<RootInfo>();
+    expectTypeOf<EmbedInfo>().toEqualTypeOf<RootInfo>();
+    expectTypeOf<NodeInfo>().toEqualTypeOf<RootInfo>();
+    expectTypeOf<RootInfo>().toEqualTypeOf<{
+      final: boolean;
+      inReplyTo?: string;
+    }>();
   });
 });

@@ -1201,7 +1201,7 @@ describe("createVoiceThereWidget spoken text reveal", () => {
     expect(bubbleTexts()).toEqual(["One two"]);
   });
 
-  it("streamSpokenText: false keeps the old behaviour (no paced assistant_* line)", async () => {
+  it("streamSpokenText: false paces nothing: a spoken turn is shown in full at once", async () => {
     const onControlMessage = await connectAndGetHandler({
       streamSpokenText: false,
     });
@@ -1211,7 +1211,40 @@ describe("createVoiceThereWidget spoken text reveal", () => {
       text: "One two three.",
       spoken: true,
     });
-    onControlMessage({ type: "speech_event", event: "agent_speaking_start" });
+    expect(bubbleTexts()).toEqual(["One two three."]);
+  });
+
+  it("default: a plain chat_reply is shown in full synchronously, with no timer advance", async () => {
+    const onControlMessage = await connectAndGetHandler({});
+    onControlMessage({ type: "chat_reply", text: "One two three four." });
+    expect(bubbleTexts()).toEqual(["One two three four."]);
+  });
+
+  it("streamSpokenText: true paces a plain chat_reply too", async () => {
+    const onControlMessage = await connectAndGetHandler({
+      streamSpokenText: true,
+    });
+    onControlMessage({
+      type: "chat_reply",
+      text: "One two three four.",
+      stream: true,
+    });
     expect(bubbleTexts()).toEqual([]);
+    onControlMessage({ type: "speech_event", event: "agent_speaking_start" });
+    expect(bubbleTexts()).toEqual(["One"]);
+  });
+
+  it("true paces spoken turns as well", async () => {
+    const onControlMessage = await connectAndGetHandler({
+      streamSpokenText: true,
+    });
+    onControlMessage({
+      type: "assistant_delta",
+      turnId: "t1",
+      text: "One two three.",
+      spoken: true,
+    });
+    onControlMessage({ type: "speech_event", event: "agent_speaking_start" });
+    expect(bubbleTexts()).toEqual(["One"]);
   });
 });

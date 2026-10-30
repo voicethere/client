@@ -194,6 +194,7 @@ export {
   type AgentTextUpdate,
   type SpokenChatCaption,
   type SpokenChatCaptionOptions,
+  type SpokenTurnUpsertInfo,
   type SpokenTextRevealMode,
 } from "../spoken-text-reveal.js";
 export { attachAudioVisualizer } from "./audio-visualizer.js";

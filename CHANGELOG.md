@@ -9,12 +9,18 @@
 
 ### Changed
 
-- The embed widget shows spoken agent text with the reveal by default: `streamSpokenText` now defaults to `true`. Pass `streamSpokenText: false` for the old behaviour.
+- The embed widget now paces spoken agent replies by default (`streamSpokenText` unset). Spoken text waits for `agent_speaking_start` and is never shown before the audio, except that a completed reply whose audio never starts is shown in full after 5 s. Plain `chat_reply` text is still shown at once; `streamSpokenText: true` paces it too and `false` paces nothing.
 
+## [0.16.1] - 2026-10-30
 
 ### Fixed
 
 - `createSpokenChatCaption` can caption a streamed reply: send `chat_reply` with `partial: true` while text grows and a final `chat_reply` without it. A streamed caption pauses between speech chunks instead of jumping to the full text.
+
+## [0.16.0] - 2026-10-30
+
+### Fixed
+
 - `createSpokenChatCaption` is now exported from `@voicethere/client/embed`. It shipped in the package but could not be imported. `VOICETHERE_CHAT_CHANNEL_LABEL` is now exported from `@voicethere/client/browser` as well. A new test packs the package and checks the public surface of every `exports` subpath.
 
 ## [0.15.0] - 2026-10-28

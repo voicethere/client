@@ -1,4 +1,9 @@
 const START_FALLBACK_MS = 400;
+/**
+ * A completed spoken turn whose audio never starts shows its full text after this wait.
+ * Internal: spoken turns never use START_FALLBACK_MS, they wait for `agent_speaking_start`.
+ */
+const SPOKEN_START_FALLBACK_MS = 5000;
 const DEFAULT_MS_PER_WORD = 330;
 const COMPLETED_IDS_MAX = 32;
 
@@ -11,6 +16,11 @@ export type SpokenTurnUpsertInfo = {
 
 export type SpokenChatCaptionOptions = {
   enabled: boolean;
+  /**
+   * Default `true`. When `false`, a plain `chat_reply` is shown at once (no pacing, no start
+   * wait) while spoken `assistant_*` turns are still paced by speech events.
+   */
+  paceChatReply?: boolean;
   onUpsert: (
     utteranceId: string,
     visibleText: string,
@@ -294,7 +304,10 @@ export function createSpokenChatCaption(
     finishStreamedIfComplete(utterance);
   };
 
-  const handleChatReply = (payload: Record<string, unknown>): void => {
+  const handleChatReply = (
+    payload: Record<string, unknown>,
+    spoken = false,
+  ): void => {
     const text = typeof payload.text === "string" ? payload.text.trim() : "";
     if (!text) return;
 
@@ -311,6 +324,12 @@ export function createSpokenChatCaption(
 
     if (!enabled) {
       resetUtteranceState();
+      emit(utteranceId, text);
+      return;
+    }
+
+    if (!spoken && opts.paceChatReply === false) {
+      // Shown at once; a spoken turn's reveal in progress is left alone.
       emit(utteranceId, text);
       return;
     }
@@ -357,6 +376,9 @@ export function createSpokenChatCaption(
       final: !partial,
       paused: false,
     };
+
+    // A spoken turn is never shown before its audio starts.
+    if (spoken) return;
 
     state.startTimeoutId = setTimeoutFn(() => {
       if (!state?.waitingForStart || state.revealStarted) return;
@@ -434,6 +456,7 @@ export function createSpokenChatCaption(
     turnId: string,
   ): void => {
     let turn = spokenTurns.get(turnId);
+    const isNew = !turn;
     if (!turn) {
       turn = {
         turnId,
@@ -455,6 +478,31 @@ export function createSpokenChatCaption(
     }
     const chunk = typeof payload.text === "string" ? payload.text.trim() : "";
 
+    // A message for an earlier turn only settles its own line; the current reveal is untouched.
+    if (enabled && !isNew && currentSpoken?.turnId !== turnId) {
+      if (type === "assistant_delta") {
+        if (chunk && !turn.done) {
+          turn.text = turn.text ? `${turn.text} ${chunk}` : chunk;
+        }
+        return;
+      }
+      const lateStatus = typeof payload.status === "string" ? payload.status : "";
+      if (
+        lateStatus === "interrupted" ||
+        lateStatus === "cancelled" ||
+        lateStatus === "failed"
+      ) {
+        turn.frozen = true;
+      }
+      if (chunk) turn.text = chunk;
+      turn.done = true;
+      const shown = turn.frozen ? turn.lastEmitted : turn.text;
+      if (shown && !(turn.finalReported && turn.lastEmitted === shown)) {
+        emit(turnId, shown);
+      }
+      return;
+    }
+
     if (type === "assistant_delta") {
       if (!chunk || turn.done) return;
       turn.text = turn.text ? `${turn.text} ${chunk}` : chunk;
@@ -464,13 +512,16 @@ export function createSpokenChatCaption(
       }
       settleOtherSpoken(turnId);
       currentSpoken = turn;
-      handleChatReply({
-        type: "chat_reply",
-        utteranceId: turnId,
-        stream: true,
-        partial: true,
-        text: turn.text,
-      });
+      handleChatReply(
+        {
+          type: "chat_reply",
+          utteranceId: turnId,
+          stream: true,
+          partial: true,
+          text: turn.text,
+        },
+        true,
+      );
       return;
     }
 
@@ -488,14 +539,33 @@ export function createSpokenChatCaption(
     currentSpoken = turn;
     if (stopped) turn.frozen = true;
     if (turn.text) {
-      handleChatReply({
-        type: "chat_reply",
-        utteranceId: turnId,
-        stream: true,
-        text: turn.text,
-      });
+      handleChatReply(
+        {
+          type: "chat_reply",
+          utteranceId: turnId,
+          stream: true,
+          text: turn.text,
+        },
+        true,
+      );
     }
     if (stopped) handleSpeechEvent({ event: "barge_in" });
+    const pending = state;
+    if (
+      !stopped &&
+      pending &&
+      pending.utteranceId === turnId &&
+      !pending.revealStarted &&
+      !pending.frozen
+    ) {
+      // Audio that never starts must not hide a completed reply forever.
+      clearUtteranceTimers(pending);
+      pending.startTimeoutId = setTimeoutFn(() => {
+        pending.startTimeoutId = undefined;
+        if (state !== pending || pending.revealStarted || pending.frozen) return;
+        snapToFull(pending);
+      }, SPOKEN_START_FALLBACK_MS);
+    }
     // Nothing visible changed since the last emit but the turn is now final.
     if (
       !turn.finalReported &&
