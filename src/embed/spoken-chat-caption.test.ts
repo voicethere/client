@@ -284,3 +284,231 @@ describe("createSpokenChatCaption", () => {
     caption.dispose();
   });
 });
+
+describe("createSpokenChatCaption streamed reply (partial: true)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const setup = () => {
+    const upserts: Array<[string, string]> = [];
+    const caption = createSpokenChatCaption({
+      enabled: true,
+      onUpsert: (id, text) => upserts.push([id, text]),
+    });
+    const reply = (text: string, partial: boolean, id = "t1") =>
+      caption.handleControlMessage({
+        type: "chat_reply",
+        utteranceId: id,
+        stream: true,
+        text,
+        ...(partial ? { partial: true } : {}),
+      });
+    const speech = (event: string) =>
+      caption.handleControlMessage({ type: "speech_event", event });
+    const last = () => upserts[upserts.length - 1]?.[1];
+    return { caption, upserts, reply, speech, last };
+  };
+
+  it("streamed reply grows without reset", () => {
+    const { caption, upserts, reply, speech, last } = setup();
+    reply("One two.", true);
+    speech("agent_speaking_start");
+    expect(last()).toBe("One");
+    reply("One two. Three four.", true);
+    for (const [, text] of upserts) {
+      expect("One two. Three four.".startsWith(text)).toBe(true);
+    }
+    expect(last()).toBe("One");
+    vi.advanceTimersByTime(330 * 3);
+    expect(last()).toBe("One two. Three four.");
+    const lengths = upserts.map(([, t]) => t.length);
+    expect(lengths).toEqual([...lengths].sort((a, b) => a - b));
+    caption.dispose();
+  });
+
+  it("speaking_end pauses, start resumes", () => {
+    const { caption, reply, speech, last } = setup();
+    reply("a b c d e f", true);
+    speech("agent_speaking_start");
+    vi.advanceTimersByTime(330);
+    expect(last()).toBe("a b");
+    speech("agent_speaking_end");
+    vi.advanceTimersByTime(330 * 3);
+    expect(last()).toBe("a b");
+    speech("agent_speaking_start");
+    vi.advanceTimersByTime(330);
+    expect(last()).toBe("a b c");
+    caption.dispose();
+  });
+
+  it("final text completes without jump", () => {
+    const { caption, upserts, reply, speech, last } = setup();
+    reply("one two", true);
+    speech("agent_speaking_start");
+    expect(last()).toBe("one");
+    reply("one two three four five six", false);
+    expect(last()).toBe("one");
+    vi.advanceTimersByTime(330);
+    expect(last()).toBe("one two");
+    speech("agent_speaking_end");
+    expect(last()).toBe("one two");
+    vi.advanceTimersByTime(330 * 10);
+    expect(last()).toBe("one two three four five six");
+    const counts = upserts.map(([, t]) => t.split(" ").length);
+    for (let k = 1; k < counts.length; k++) {
+      expect(counts[k]! - counts[k - 1]!).toBeLessThanOrEqual(1);
+    }
+    const count = upserts.length;
+    vi.advanceTimersByTime(330 * 10);
+    expect(upserts.length).toBe(count);
+    caption.dispose();
+  });
+
+  it("final after last speaking_end resumes", () => {
+    const { caption, upserts, reply, speech, last } = setup();
+    reply("a b c d", true);
+    speech("agent_speaking_start");
+    vi.advanceTimersByTime(330);
+    expect(last()).toBe("a b");
+    speech("agent_speaking_end");
+    vi.advanceTimersByTime(990);
+    expect(last()).toBe("a b");
+    reply("a b c d", false);
+    vi.advanceTimersByTime(330);
+    expect(last()).toBe("a b c");
+    vi.advanceTimersByTime(330);
+    expect(last()).toBe("a b c d");
+    const count = upserts.length;
+    vi.advanceTimersByTime(3300);
+    expect(upserts.length).toBe(count);
+    caption.dispose();
+  });
+
+  it("streamed reply resumes after catching up", () => {
+    const { caption, reply, speech, last } = setup();
+    reply("a b", true);
+    speech("agent_speaking_start");
+    expect(last()).toBe("a");
+    vi.advanceTimersByTime(330);
+    expect(last()).toBe("a b");
+    vi.advanceTimersByTime(990);
+    expect(last()).toBe("a b");
+    reply("a b c d", true);
+    vi.advanceTimersByTime(330);
+    expect(last()).toBe("a b c");
+    vi.advanceTimersByTime(330);
+    expect(last()).toBe("a b c d");
+    caption.dispose();
+  });
+
+  it("rewritten streamed text clamps", () => {
+    const { caption, reply, speech, last } = setup();
+    reply("a b c d", true);
+    speech("agent_speaking_start");
+    vi.advanceTimersByTime(660);
+    expect(last()).toBe("a b c");
+    reply("x y", true);
+    expect(last()).toBe("x y");
+    reply("x y z", false);
+    vi.advanceTimersByTime(330);
+    expect(last()).toBe("x y z");
+    caption.dispose();
+  });
+
+  it("barge_in freezes a streamed reply", () => {
+    const { caption, upserts, reply, speech, last } = setup();
+    reply("a b c", true);
+    speech("agent_speaking_start");
+    vi.advanceTimersByTime(330);
+    expect(last()).toBe("a b");
+    speech("barge_in");
+    const count = upserts.length;
+    reply("x y z", true);
+    reply("x y z w", false);
+    vi.advanceTimersByTime(3300);
+    expect(upserts.length).toBe(count);
+    expect(last()).toBe("a b");
+    caption.dispose();
+  });
+
+  it("completed id re-sent is a no-op", () => {
+    const { caption, upserts, reply, speech } = setup();
+    reply("a b", true);
+    speech("agent_speaking_start");
+    reply("a b", false);
+    vi.advanceTimersByTime(330 * 3);
+    const count = upserts.length;
+    reply("a b", false);
+    vi.advanceTimersByTime(330 * 10);
+    expect(upserts.length).toBe(count);
+    caption.dispose();
+  });
+
+  it("two streamed ids keep their own text", () => {
+    const { caption, upserts, reply, speech } = setup();
+    reply("alpha one", true, "A");
+    speech("agent_speaking_start");
+    reply("beta one", true, "B");
+    reply("alpha one two", true, "A");
+    speech("agent_speaking_start");
+    vi.advanceTimersByTime(330 * 5);
+    for (const [id, text] of upserts) {
+      const expected = id === "A" ? "alpha one two" : "beta one";
+      expect(expected.startsWith(text)).toBe(true);
+    }
+    caption.dispose();
+  });
+
+  it("completed id re-sent as partial is a no-op", () => {
+    const { caption, upserts, reply, speech } = setup();
+    reply("a b", true);
+    speech("agent_speaking_start");
+    reply("a b", false);
+    vi.advanceTimersByTime(990);
+    const count = upserts.length;
+    reply("a b", true);
+    vi.advanceTimersByTime(3300);
+    expect(upserts.length).toBe(count);
+    caption.dispose();
+  });
+
+  it("completed id is remembered after another reply", () => {
+    const { caption, upserts, reply, speech } = setup();
+    reply("a b", true, "A");
+    speech("agent_speaking_start");
+    reply("a b", false, "A");
+    vi.advanceTimersByTime(990);
+    reply("c d", false, "B");
+    speech("agent_speaking_start");
+    speech("agent_speaking_end");
+    const count = upserts.length;
+    reply("a b", false, "A");
+    vi.advanceTimersByTime(3300);
+    expect(upserts.length).toBe(count);
+    expect(upserts.slice(count).some(([id]) => id === "A")).toBe(false);
+    caption.dispose();
+  });
+
+  it("completed ids keep only the last 32", () => {
+    const { caption, upserts, reply, speech } = setup();
+    for (let n = 0; n <= 32; n++) {
+      reply("a b", true, `s${n}`);
+      speech("agent_speaking_start");
+      reply("a b", false, `s${n}`);
+      vi.advanceTimersByTime(990);
+    }
+    const count = upserts.length;
+    reply("a b", false, "s32");
+    vi.advanceTimersByTime(3300);
+    expect(upserts.length).toBe(count);
+    reply("a b", false, "s0");
+    vi.advanceTimersByTime(400);
+    expect(upserts.slice(count).some(([id]) => id === "s0")).toBe(true);
+    caption.dispose();
+  });
+});
