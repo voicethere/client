@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.17.1] - 2026-10-30
+
+### Fixed
+
+- A spoken reply interrupted before its first word was revealed (a barge-in, often the listener's speakers echoing into the mic) no longer disappears. Once the reply's audio has started, `onAgentText` and the spoken caption show at least its first sentence when the turn is interrupted, replaced by the next turn, or when the session closes or reconnects. A reply whose audio never started still shows nothing. An `agent_speaking_start` that arrives just before a turn's first `assistant_delta` now counts for that turn and its text starts revealing right away, and closing the session while a completed reply is still being revealed reports its full text.
+
 ## [0.17.0] - 2026-10-30
 
 ### Added

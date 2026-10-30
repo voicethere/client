@@ -390,3 +390,232 @@ describe("SpokenTurnUpsertInfo", () => {
     }>();
   });
 });
+
+// A spoken turn whose audio started must never end without a visible line: the listener heard
+// part of the answer. A barge-in (often the listener's own speakers echoing into the mic) can
+// land before the reveal showed its first word. Lines are keyed by turnId in first-seen order.
+describe("first sentence once audio started", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function linesSetup() {
+    const { reveal, updates } = setup();
+    const feed = (payload: Record<string, unknown>) =>
+      reveal.handleControlMessage(payload);
+    const getLines = () => {
+      const order: string[] = [];
+      const latest = new Map<string, string>();
+      for (const u of updates) {
+        if (!u.text) continue;
+        if (!latest.has(u.turnId)) order.push(u.turnId);
+        latest.set(u.turnId, u.text);
+      }
+      return order.map((id) => `[agent] ${latest.get(id)}`);
+    };
+    return { feed, getLines, reveal, updates };
+  }
+
+  it("barge-in within 400 ms of the first delta still shows the first sentence", () => {
+    const { feed, getLines } = linesSetup();
+    feed(speech("agent_speaking_start"));
+    feed(delta("H", "Sure, here it is."));
+    vi.advanceTimersByTime(200);
+    feed(speech("barge_in"));
+    feed(delta("H", "More text follows."));
+    feed(done("H", "Sure, here it is. More text follows.", "interrupted"));
+    vi.advanceTimersByTime(5000);
+    expect(getLines()).toEqual(["[agent] Sure, here it is."]);
+  });
+
+  it("barge-in before the first word on a later turn still shows its first sentence", () => {
+    const { feed, getLines } = linesSetup();
+    feed(delta("E", "Alpha beta."));
+    feed(speech("agent_speaking_start"));
+    feed(done("E", "Alpha beta."));
+    feed(speech("agent_speaking_end"));
+    vi.advanceTimersByTime(5000);
+    feed(speech("agent_speaking_start"));
+    feed(delta("F", "Gamma delta epsilon."));
+    feed(speech("barge_in"));
+    feed(done("F", "Gamma delta epsilon. Zeta.", "interrupted"));
+    vi.advanceTimersByTime(5000);
+    expect(getLines()).toEqual([
+      "[agent] Alpha beta.",
+      "[agent] Gamma delta epsilon.",
+    ]);
+  });
+
+  it("start, barge-in, end, then the turn's delta and interrupted done still shows its first sentence", () => {
+    const { feed, getLines } = linesSetup();
+    feed(speech("agent_speaking_start"));
+    feed(speech("barge_in"));
+    feed(speech("agent_speaking_end"));
+    feed(delta("B", "Sure, here it is."));
+    feed(done("B", "Sure, here it is. More text follows.", "interrupted"));
+    vi.advanceTimersByTime(5000);
+    expect(getLines()).toEqual(["[agent] Sure, here it is."]);
+  });
+
+  it("start, barge-in without an end, then delta and interrupted done shows its first sentence", () => {
+    const { feed, getLines } = linesSetup();
+    feed(speech("agent_speaking_start"));
+    feed(speech("barge_in"));
+    feed(delta("B", "Sure, here it is."));
+    feed(done("B", "Sure, here it is. More text follows.", "interrupted"));
+    vi.advanceTimersByTime(5000);
+    expect(getLines()).toEqual(["[agent] Sure, here it is."]);
+  });
+
+  it("a trailing start of a finished turn does not give the next turn audio", () => {
+    const { feed, getLines } = linesSetup();
+    feed(delta("E", "Alpha beta."));
+    feed(speech("agent_speaking_start"));
+    feed(done("E", "Alpha beta."));
+    vi.advanceTimersByTime(5000);
+    feed(speech("agent_speaking_start"));
+    feed(speech("agent_speaking_end"));
+    feed(delta("F", "Gamma delta."));
+    feed(done("F", "Gamma delta.", "interrupted"));
+    vi.advanceTimersByTime(5000);
+    expect(getLines()).toEqual(["[agent] Alpha beta."]);
+  });
+
+  it("a barge-in on a finished turn's trailing audio does not freeze the next turn", () => {
+    const { feed, getLines } = linesSetup();
+    feed(delta("A", "Alpha beta."));
+    feed(done("A", "Alpha beta."));
+    vi.advanceTimersByTime(5000);
+    feed(speech("agent_speaking_start"));
+    feed(speech("barge_in"));
+    feed(speech("agent_speaking_end"));
+    vi.advanceTimersByTime(20_000);
+    feed(delta("B", "One."));
+    feed(speech("agent_speaking_start"));
+    feed(delta("B", "Two."));
+    vi.advanceTimersByTime(5000);
+    expect(getLines()).toEqual(["[agent] Alpha beta.", "[agent] One. Two."]);
+    feed(done("B", "One. Two."));
+    vi.advanceTimersByTime(5000);
+    expect(getLines()).toEqual(["[agent] Alpha beta.", "[agent] One. Two."]);
+  });
+
+  it("an unclaimed cut expires", () => {
+    const { feed, getLines } = linesSetup();
+    feed(speech("agent_speaking_start"));
+    feed(speech("barge_in"));
+    vi.advanceTimersByTime(2000);
+    feed(delta("B", "Sure, here it is."));
+    feed(done("B", "Sure, here it is. More text follows.", "interrupted"));
+    vi.advanceTimersByTime(5000);
+    expect(getLines()).toEqual([]);
+  });
+
+  it("a new unclaimed start after a cut start clears the cut", () => {
+    const { feed, getLines } = linesSetup();
+    feed(speech("agent_speaking_start"));
+    feed(speech("barge_in"));
+    feed(speech("agent_speaking_start"));
+    feed(delta("B", "One two."));
+    feed(speech("agent_speaking_start"));
+    feed(delta("B", "Three."));
+    vi.advanceTimersByTime(5000);
+    expect(getLines()).toEqual(["[agent] One two. Three."]);
+  });
+
+  it("a start just before the turn's first delta paces it without a done", () => {
+    const { feed, getLines } = linesSetup();
+    feed(speech("agent_speaking_start"));
+    feed(delta("S", "One sentence only."));
+    vi.advanceTimersByTime(500);
+    expect(getLines()).toEqual(["[agent] One"]);
+    vi.advanceTimersByTime(600);
+    expect(getLines()).toEqual(["[agent] One sentence only."]);
+  });
+
+  it("dispose while a finished turn is still pacing shows its full text", () => {
+    const { feed, getLines, reveal, updates } = linesSetup();
+    feed(speech("agent_speaking_start"));
+    feed(delta("P", "One two three four five six."));
+    feed(done("P", "One two three four five six."));
+    vi.advanceTimersByTime(660);
+    expect(getLines()[0]!.length).toBeLessThan(
+      "[agent] One two three four five six.".length,
+    );
+    reveal.dispose();
+    expect(getLines()).toEqual(["[agent] One two three four five six."]);
+    expect(updates.at(-1)!.final).toBe(true);
+  });
+
+  it("an interrupted turn whose audio never started shows nothing", () => {
+    const { feed, getLines } = linesSetup();
+    feed(delta("I", "Never spoken."));
+    feed(done("I", "Never spoken.", "interrupted"));
+    vi.advanceTimersByTime(5000);
+    expect(getLines()).toEqual([]);
+  });
+
+  it("assistant_done before any agent_speaking_start reveals the full line", () => {
+    const { feed, getLines } = linesSetup();
+    feed(delta("J", "Here is the answer."));
+    feed(done("J", "Here is the answer."));
+    vi.advanceTimersByTime(5000);
+    expect(getLines()).toEqual(["[agent] Here is the answer."]);
+    feed(speech("agent_speaking_start"));
+    feed(speech("agent_speaking_end"));
+    expect(getLines()).toEqual(["[agent] Here is the answer."]);
+  });
+
+  // Client timing: L's audio has not started, so L stays hidden until its own start or, after a
+  // completed done, the 5000 ms fallback (no 400 ms fallback).
+  it("a second turn starting before the first is done keeps a line for the first", () => {
+    const { feed, getLines } = linesSetup();
+    feed(speech("agent_speaking_start"));
+    feed(delta("K", "First answer here."));
+    feed(delta("L", "Second answer."));
+    vi.advanceTimersByTime(5000);
+    expect(getLines()).toEqual(["[agent] First answer here."]);
+    feed(done("K", "First answer here. And more."));
+    feed(done("L", "Second answer."));
+    vi.advanceTimersByTime(5000);
+    expect(getLines()).toEqual([
+      "[agent] First answer here. And more.",
+      "[agent] Second answer.",
+    ]);
+  });
+
+  it("dispose (disconnect or reconnect) mid-turn keeps the first sentence once audio started", () => {
+    const { feed, getLines, reveal } = linesSetup();
+    feed(speech("agent_speaking_start"));
+    feed(delta("M", "Hello from the agent."));
+    reveal.dispose();
+    vi.advanceTimersByTime(5000);
+    expect(getLines()).toEqual(["[agent] Hello from the agent."]);
+  });
+
+  it("dispose before the turn's audio started shows nothing", () => {
+    const { feed, getLines, reveal } = linesSetup();
+    feed(delta("N", "Not yet spoken."));
+    reveal.dispose();
+    vi.advanceTimersByTime(5000);
+    expect(getLines()).toEqual([]);
+  });
+
+  it("paces with timers only, so a hidden tab without requestAnimationFrame still reveals", () => {
+    vi.stubGlobal("requestAnimationFrame", () => {
+      throw new Error("requestAnimationFrame must not drive the spoken reveal");
+    });
+    try {
+      const { feed, getLines } = linesSetup();
+      feed(delta("O", "One two three."));
+      feed(speech("agent_speaking_start"));
+      vi.advanceTimersByTime(5000);
+      expect(getLines()).toEqual(["[agent] One two three."]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
