@@ -36,7 +36,7 @@ import {
   getWidgetPreset,
   type ResolvedWidgetTheme,
 } from "./presets.js";
-import { createSpokenChatCaption } from "./spoken-chat-caption.js";
+import { createSpokenChatCaption } from "../spoken-text-reveal.js";
 
 export type {
   VoiceThereWidgetConfigV1,
@@ -81,10 +81,15 @@ export {
   WIDGET_KEY_HASH_FIXTURE_RAW,
 } from "./widget-key-hash.js";
 export {
+  createAgentTextReveal,
   createSpokenChatCaption,
+  type AgentTextReveal,
+  type AgentTextUpdate,
   type SpokenChatCaption,
   type SpokenChatCaptionOptions,
-} from "./spoken-chat-caption.js";
+  type SpokenTurnUpsertInfo,
+  type SpokenTextRevealMode,
+} from "../spoken-text-reveal.js";
 
 export type VoiceThereWidgetOptions = {
   clientKey: string;
@@ -123,7 +128,10 @@ type ResolvedVoiceThereWidgetOptions = {
   position: WidgetPosition;
   positionOffset?: WidgetPositionOffset;
   customCss?: string;
+  /** Spoken `assistant_*` text is paced (any value but `false`). */
   streamSpokenText: boolean;
+  /** Plain `chat_reply` is paced too (only an explicit `true`). */
+  paceChatReply: boolean;
 };
 
 function mergeWidgetOptions(
@@ -164,7 +172,9 @@ function mergeWidgetOptions(
     positionOffset: inline.positionOffset ?? remote?.positionOffset,
     customCss: inline.customCss ?? remote?.customCss,
     streamSpokenText:
-      inline.streamSpokenText ?? remote?.streamSpokenText ?? false,
+      (inline.streamSpokenText ?? remote?.streamSpokenText) !== false,
+    paceChatReply:
+      (inline.streamSpokenText ?? remote?.streamSpokenText) === true,
   };
 }
 
@@ -650,12 +660,14 @@ function buildVoiceThereWidget(
     transcript.scrollTop = transcript.scrollHeight;
   };
 
-  let spokenCaption = runtime.streamSpokenText
-    ? createSpokenChatCaption({
-        enabled: true,
-        onUpsert: upsertIncomingTranscriptBubble,
-      })
-    : null;
+  // Always present: with streamSpokenText false it shows spoken replies at once.
+  const makeSpokenCaption = () =>
+    createSpokenChatCaption({
+      enabled: runtime.streamSpokenText,
+      paceChatReply: runtime.paceChatReply,
+      onUpsert: upsertIncomingTranscriptBubble,
+    });
+  let spokenCaption = makeSpokenCaption();
 
   const composer = document.createElement("div");
   composer.className = WIDGET_CSS_CLASSES.composer;
@@ -800,7 +812,7 @@ function buildVoiceThereWidget(
       if (session) {
         session.disconnect();
         session = null;
-        spokenCaption?.dispose();
+        spokenCaption.dispose();
         hideSessionNotices();
         setStatusDisplay("Disconnected");
         connectBtn.textContent = "Connect";
@@ -841,9 +853,21 @@ function buildVoiceThereWidget(
         audioElement: inboundAudio,
         onDebugEvent: debug,
         onControlMessage: (payload) => {
-          if (spokenCaption) {
+          const spokenAssistant =
+            payload.spoken === true &&
+            (payload.type === "assistant_delta" ||
+              payload.type === "assistant_done");
+          if (
+            spokenAssistant ||
+            (runtime.streamSpokenText && runtime.paceChatReply)
+          ) {
+            // Spoken turns, and every agent message when chat replies are paced too.
             spokenCaption.handleControlMessage(payload);
             return;
+          }
+          if (runtime.streamSpokenText && payload.type === "speech_event") {
+            // Default: speech events only pace spoken turns; typed text below is unchanged.
+            spokenCaption.handleControlMessage(payload);
           }
           const incoming = incomingTextFromControlMessage(payload);
           if (incoming) {
@@ -864,7 +888,7 @@ function buildVoiceThereWidget(
             const lostSession = session;
             session = null;
             lostSession?.disconnect();
-            spokenCaption?.dispose();
+            spokenCaption.dispose();
             hideSessionNotices();
             connectBtn.textContent = "Connect";
             connectBtn.title = "";
@@ -939,20 +963,10 @@ function buildVoiceThereWidget(
     }
     if (partial.customCss !== undefined) runtime.customCss = partial.customCss;
     if (partial.streamSpokenText !== undefined) {
-      runtime.streamSpokenText = partial.streamSpokenText;
-      if (runtime.streamSpokenText) {
-        if (!spokenCaption) {
-          spokenCaption = createSpokenChatCaption({
-            enabled: true,
-            onUpsert: upsertIncomingTranscriptBubble,
-          });
-        } else {
-          spokenCaption.setEnabled(true);
-        }
-      } else if (spokenCaption) {
-        spokenCaption.dispose();
-        spokenCaption = null;
-      }
+      runtime.streamSpokenText = partial.streamSpokenText !== false;
+      runtime.paceChatReply = partial.streamSpokenText === true;
+      spokenCaption.dispose();
+      spokenCaption = makeSpokenCaption();
     }
     applyAppearance();
   };
@@ -965,7 +979,7 @@ function buildVoiceThereWidget(
       setOpen(false);
     },
     destroy: () => {
-      spokenCaption?.dispose();
+      spokenCaption.dispose();
       session?.disconnect();
       inboundAudio.remove();
       root.remove();

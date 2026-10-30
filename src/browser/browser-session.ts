@@ -26,6 +26,10 @@ export type ConnectBrowserSessionOptions = {
   onSessionError?: import("../session-errors.js").SessionErrorHandler;
   onControlMessage?: (payload: Record<string, unknown>) => void;
   onAgentState?: BrowserVoiceSessionOptions["onAgentState"];
+  /** `playback` (default) paces spoken agent text with the audio; `immediate` reports it at once. */
+  spokenTextReveal?: BrowserVoiceSessionOptions["spokenTextReveal"];
+  /** The only callback that reports agent text (see {@link BrowserVoiceSessionOptions.onAgentText}). */
+  onAgentText?: BrowserVoiceSessionOptions["onAgentText"];
   onAgentInterrupted?: BrowserVoiceSessionOptions["onAgentInterrupted"];
   onBinaryMessage?: BrowserVoiceSessionOptions["onBinaryMessage"];
   onSyncBinaryMessage?: BrowserVoiceSessionOptions["onSyncBinaryMessage"];
@@ -90,6 +94,8 @@ export async function connectBrowserSession(
     onSessionError: options.onSessionError,
     onControlMessage: options.onControlMessage,
     onAgentState: options.onAgentState,
+    spokenTextReveal: options.spokenTextReveal,
+    onAgentText: options.onAgentText,
     onAgentInterrupted: options.onAgentInterrupted,
     onBinaryMessage: options.onBinaryMessage,
     onSyncBinaryMessage: options.onSyncBinaryMessage,
@@ -181,6 +187,16 @@ export {
   type ConnectionErrorSource,
   type RootConnectionErrorHandler,
 } from "../connection-errors.js";
+export {
+  createAgentTextReveal,
+  createSpokenChatCaption,
+  type AgentTextReveal,
+  type AgentTextUpdate,
+  type SpokenChatCaption,
+  type SpokenChatCaptionOptions,
+  type SpokenTurnUpsertInfo,
+  type SpokenTextRevealMode,
+} from "../spoken-text-reveal.js";
 export { attachAudioVisualizer } from "./audio-visualizer.js";
 export { createDebugConsole } from "./debug-console.js";
 

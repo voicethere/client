@@ -56,3 +56,14 @@ export {
   CLIENT_CAPABILITIES,
   type ClientCapabilities,
 } from "../browser/client-capabilities.js";
+
+export {
+  createAgentTextReveal,
+  createSpokenChatCaption,
+  type AgentTextReveal,
+  type AgentTextUpdate,
+  type SpokenChatCaption,
+  type SpokenChatCaptionOptions,
+  type SpokenTurnUpsertInfo,
+  type SpokenTextRevealMode,
+} from "../spoken-text-reveal.js";

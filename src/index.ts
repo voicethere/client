@@ -42,6 +42,16 @@ export {
   type RootConnectionErrorHandler,
 } from "./connection-errors.js";
 export {
+  createAgentTextReveal,
+  createSpokenChatCaption,
+  type AgentTextReveal,
+  type AgentTextUpdate,
+  type SpokenChatCaption,
+  type SpokenChatCaptionOptions,
+  type SpokenTurnUpsertInfo,
+  type SpokenTextRevealMode,
+} from "./spoken-text-reveal.js";
+export {
   parseAgentInterruptedEvent,
   parseAgentStateEvent,
 } from "./agent-control-events.js";

@@ -1157,3 +1157,122 @@ describe("createVoiceThereWidget connection recovery", () => {
     expect(connectBtn.textContent).toBe("Connect");
   });
 });
+
+describe("createVoiceThereWidget spoken text reveal", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const connectAndGetHandler = async (extra: {
+    streamSpokenText?: boolean;
+  }) => {
+    const widget = createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      mode: BrowserSessionModeType.Voice,
+      mount: mount as unknown as HTMLElement,
+      ...extra,
+    });
+    findButtonByText(mount, "Connect")!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    const onControlMessage = (
+      connectBrowserSession.mock.calls[0]![0] as {
+        onControlMessage: (payload: Record<string, unknown>) => void;
+      }
+    ).onControlMessage;
+    return { widget, onControlMessage };
+  };
+  const bubbleTexts = () =>
+    createdElements
+      .filter((el) => el.textContent.startsWith("One"))
+      .map((el) => el.textContent);
+
+  it("is on by default: a spoken turn is paced word by word", async () => {
+    const { onControlMessage } = await connectAndGetHandler({});
+    onControlMessage({
+      type: "assistant_delta",
+      turnId: "t1",
+      text: "One two three.",
+      spoken: true,
+    });
+    onControlMessage({ type: "speech_event", event: "agent_speaking_start" });
+    expect(bubbleTexts()).toEqual(["One"]);
+    await vi.advanceTimersByTimeAsync(330);
+    expect(bubbleTexts()).toEqual(["One two"]);
+  });
+
+  it("streamSpokenText: false paces nothing: a spoken turn is shown in full at once", async () => {
+    const { onControlMessage } = await connectAndGetHandler({
+      streamSpokenText: false,
+    });
+    onControlMessage({
+      type: "assistant_delta",
+      turnId: "t1",
+      text: "One two three.",
+      spoken: true,
+    });
+    expect(bubbleTexts()).toEqual(["One two three."]);
+  });
+
+  it("default: a plain chat_reply is shown in full synchronously, with no timer advance", async () => {
+    const { onControlMessage } = await connectAndGetHandler({});
+    onControlMessage({ type: "chat_reply", text: "One two three four." });
+    expect(bubbleTexts()).toEqual(["One two three four."]);
+  });
+
+  it("streamSpokenText: true paces a plain chat_reply too", async () => {
+    const { onControlMessage } = await connectAndGetHandler({
+      streamSpokenText: true,
+    });
+    onControlMessage({
+      type: "chat_reply",
+      text: "One two three four.",
+      stream: true,
+    });
+    expect(bubbleTexts()).toEqual([]);
+    onControlMessage({ type: "speech_event", event: "agent_speaking_start" });
+    expect(bubbleTexts()).toEqual(["One"]);
+  });
+
+  it("true paces spoken turns as well", async () => {
+    const { onControlMessage } = await connectAndGetHandler({
+      streamSpokenText: true,
+    });
+    onControlMessage({
+      type: "assistant_delta",
+      turnId: "t1",
+      text: "One two three.",
+      spoken: true,
+    });
+    onControlMessage({ type: "speech_event", event: "agent_speaking_start" });
+    expect(bubbleTexts()).toEqual(["One"]);
+  });
+
+  it("updateConfig({ streamSpokenText: false }) mid-reveal disposes the caption without leaking timers, then shows spoken text at once", async () => {
+    const { widget, onControlMessage } = await connectAndGetHandler({});
+    onControlMessage({
+      type: "assistant_delta",
+      turnId: "t1",
+      text: "One two three.",
+      spoken: true,
+    });
+    onControlMessage({ type: "speech_event", event: "agent_speaking_start" });
+    expect(bubbleTexts()).toEqual(["One"]);
+    const timersBefore = vi.getTimerCount();
+    widget.updateConfig({ streamSpokenText: false });
+    expect(vi.getTimerCount()).toBeLessThan(timersBefore);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(bubbleTexts()).toEqual(["One"]);
+    onControlMessage({
+      type: "assistant_delta",
+      turnId: "t2",
+      text: "Four five.",
+      spoken: true,
+    });
+    const texts = createdElements.map((el) => el.textContent);
+    expect(texts).toContain("Four five.");
+  });
+});

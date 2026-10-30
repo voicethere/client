@@ -1,10 +1,26 @@
 # Changelog
 
-## [Unreleased]
+## [0.17.0] - 2026-10-30
+
+### Added
+
+- Spoken text reveal for voice sessions. New session options `onAgentText` and `spokenTextReveal` (`"playback"` default, or `"immediate"`) on `connectBrowserSession`, `connectBrowserVoiceSession` and the `./node` entry. Spoken `assistant_delta` / `assistant_done` messages (`spoken: true`, paired by `turnId`) are revealed word by word while the agent speaks, with `final` and `inReplyTo` on each update. Typed turns are reported at once and the `chat_reply` that follows is not reported twice. The reveal and its timers are disposed when the session closes.
+- `createSpokenChatCaption` handles spoken `assistant_delta` / `assistant_done` natively, and `createAgentTextReveal` is exported from `.`, `./browser`, `./embed` and `./node`. The caption module moved to `src/spoken-text-reveal.ts`; `@voicethere/client/embed` keeps exporting it.
+
+### Changed
+
+- The embed widget now paces spoken agent replies by default (`streamSpokenText` unset). Spoken text waits for `agent_speaking_start` and is never shown before the audio, except that a completed reply whose audio never starts is shown in full after 5 s. Plain `chat_reply` text is still shown at once; `streamSpokenText: true` paces it too and `false` paces nothing.
+
+## [0.16.1] - 2026-10-30
 
 ### Fixed
 
 - `createSpokenChatCaption` can caption a streamed reply: send `chat_reply` with `partial: true` while text grows and a final `chat_reply` without it. A streamed caption pauses between speech chunks instead of jumping to the full text.
+
+## [0.16.0] - 2026-10-30
+
+### Fixed
+
 - `createSpokenChatCaption` is now exported from `@voicethere/client/embed`. It shipped in the package but could not be imported. `VOICETHERE_CHAT_CHANNEL_LABEL` is now exported from `@voicethere/client/browser` as well. A new test packs the package and checks the public surface of every `exports` subpath.
 
 ## [0.15.0] - 2026-10-28
