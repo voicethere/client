@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- Release tags (`release/X.Y.Z`) now fail the release job before `npm publish` when `CHANGELOG.md` has no `## [X.Y.Z]` entry with at least one bullet.
+
 ## [0.17.0] - 2026-10-30
 
 ### Added
