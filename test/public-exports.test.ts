@@ -153,6 +153,7 @@ const EXPECTED_EXPORTS: Record<string, string[]> = {
     "isRetryableSessionApiFailure",
     "isRetryableSessionApiNetworkError",
     "isRetryableSessionApiStatus",
+    "parseAgentContentEvent",
     "startSession",
     "summarizeRtcStatsReport",
     "createAgentTextReveal",
