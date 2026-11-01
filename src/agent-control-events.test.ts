@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  parseAgentContentEvent,
   parseAgentInterruptedEvent,
   parseAgentStateEvent,
 } from "./agent-control-events.js";
@@ -71,5 +72,104 @@ describe("agent control events", () => {
         replyPlayedMs: -1,
       }),
     ).toBeNull();
+  });
+});
+
+describe("parseAgentContentEvent", () => {
+  const URL = "https://app.voicethere.dev/docs/pricing";
+
+  it("parses a spoken link with label and inReplyTo", () => {
+    expect(
+      parseAgentContentEvent({
+        type: "assistant_content",
+        turnId: "t1",
+        inReplyTo: "utt-1",
+        spoken: true,
+        content: { kind: "link", url: URL, label: " Pricing " },
+      }),
+    ).toEqual({
+      turnId: "t1",
+      inReplyTo: "utt-1",
+      spoken: true,
+      content: { kind: "link", url: URL, label: "Pricing" },
+    });
+  });
+
+  it("parses a chat link without label as not spoken", () => {
+    expect(
+      parseAgentContentEvent({
+        type: "assistant_content",
+        turnId: "t2",
+        content: { kind: "link", url: URL },
+      }),
+    ).toEqual({
+      turnId: "t2",
+      spoken: false,
+      content: { kind: "link", url: URL },
+    });
+  });
+
+  it("ignores unknown kinds, non-https links, bad URLs and a missing turnId", () => {
+    const base = { type: "assistant_content", turnId: "t" };
+    expect(
+      parseAgentContentEvent({ ...base, content: { kind: "image", url: URL } }),
+    ).toBeNull();
+    expect(
+      parseAgentContentEvent({
+        ...base,
+        content: { kind: "link", url: "http://example.com" },
+      }),
+    ).toBeNull();
+    expect(
+      parseAgentContentEvent({
+        ...base,
+        content: { kind: "link", url: "javascript:alert(1)" },
+      }),
+    ).toBeNull();
+    expect(
+      parseAgentContentEvent({
+        ...base,
+        content: { kind: "link", url: "not a url" },
+      }),
+    ).toBeNull();
+    expect(
+      parseAgentContentEvent({
+        type: "assistant_content",
+        content: { kind: "link", url: URL },
+      }),
+    ).toBeNull();
+    expect(
+      parseAgentContentEvent({
+        type: "assistant_delta",
+        turnId: "t",
+        text: URL,
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects a url longer than 2048 chars and accepts one of exactly 2048", () => {
+    const at = (url: string) =>
+      parseAgentContentEvent({
+        type: "assistant_content",
+        turnId: "t",
+        content: { kind: "link", url },
+      });
+    const long = "https://a.dev/" + "x".repeat(2040);
+    expect(long).toHaveLength(2054);
+    expect(at(long)).toBeNull();
+    const max = "https://a.dev/" + "x".repeat(2034);
+    expect(max).toHaveLength(2048);
+    expect(at(max)?.content.url).toBe(max);
+  });
+
+  it("caps the label at 200 chars and drops a blank label", () => {
+    const at = (label: string) =>
+      parseAgentContentEvent({
+        type: "assistant_content",
+        turnId: "t",
+        content: { kind: "link", url: URL, label },
+      });
+    expect(at("  " + "L".repeat(250))?.content.label).toHaveLength(200);
+    expect(at("   ")?.content).toEqual({ kind: "link", url: URL });
   });
 });

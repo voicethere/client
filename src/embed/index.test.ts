@@ -1276,3 +1276,67 @@ describe("createVoiceThereWidget spoken text reveal", () => {
     expect(texts).toContain("Four five.");
   });
 });
+
+describe("createVoiceThereWidget agent links", () => {
+  const connectAndGetContent = async () => {
+    const widget = createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      mode: BrowserSessionModeType.Voice,
+      mount: mount as unknown as HTMLElement,
+    });
+    findButtonByText(mount, "Connect")!.click();
+    await vi.waitFor(() => expect(connectBrowserSession).toHaveBeenCalled());
+    const onAgentContent = (
+      connectBrowserSession.mock.calls[0]![0] as {
+        onAgentContent: (event: Record<string, unknown>) => void;
+      }
+    ).onAgentContent;
+    return { widget, onAgentContent };
+  };
+  const anchors = () => createdElements.filter((el) => el.tagName === "A");
+
+  it("renders an https link as a new-tab anchor with its label", async () => {
+    const { onAgentContent } = await connectAndGetContent();
+    onAgentContent({
+      turnId: "t1",
+      spoken: true,
+      content: {
+        kind: "link",
+        url: "https://app.voicethere.dev/docs/pricing",
+        label: "Pricing",
+      },
+    });
+    const links = anchors();
+    expect(links).toHaveLength(1);
+    const a = links[0] as unknown as Record<string, string>;
+    expect(a.href).toBe("https://app.voicethere.dev/docs/pricing");
+    expect(a.target).toBe("_blank");
+    expect(a.rel).toBe("noopener noreferrer");
+    expect(a.textContent).toBe("Pricing");
+  });
+
+  it("shows the URL when there is no label and never renders another scheme", async () => {
+    const { onAgentContent } = await connectAndGetContent();
+    onAgentContent({
+      turnId: "t1",
+      spoken: false,
+      content: { kind: "link", url: "javascript:alert(1)" },
+    });
+    onAgentContent({
+      turnId: "t1",
+      spoken: false,
+      content: { kind: "link", url: "http://example.com/x" },
+    });
+    expect(anchors()).toHaveLength(0);
+    onAgentContent({
+      turnId: "t1",
+      spoken: false,
+      content: { kind: "link", url: "https://example.com/x" },
+    });
+    expect(anchors().map((a) => a.textContent)).toEqual([
+      "https://example.com/x",
+    ]);
+  });
+});

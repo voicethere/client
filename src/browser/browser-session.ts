@@ -31,6 +31,7 @@ export type ConnectBrowserSessionOptions = {
   /** The only callback that reports agent text (see {@link BrowserVoiceSessionOptions.onAgentText}). */
   onAgentText?: BrowserVoiceSessionOptions["onAgentText"];
   onAgentInterrupted?: BrowserVoiceSessionOptions["onAgentInterrupted"];
+  onAgentContent?: BrowserVoiceSessionOptions["onAgentContent"];
   onBinaryMessage?: BrowserVoiceSessionOptions["onBinaryMessage"];
   onSyncBinaryMessage?: BrowserVoiceSessionOptions["onSyncBinaryMessage"];
   onAgentAudioTrack?: BrowserVoiceSessionOptions["onAgentAudioTrack"];
@@ -97,6 +98,7 @@ export async function connectBrowserSession(
     spokenTextReveal: options.spokenTextReveal,
     onAgentText: options.onAgentText,
     onAgentInterrupted: options.onAgentInterrupted,
+    onAgentContent: options.onAgentContent,
     onBinaryMessage: options.onBinaryMessage,
     onSyncBinaryMessage: options.onSyncBinaryMessage,
     onAgentAudioTrack: options.onAgentAudioTrack,
@@ -143,10 +145,13 @@ export {
   type BrowserVoiceSessionOptions,
 } from "./browser-voice-session.js";
 export {
+  parseAgentContentEvent,
   parseAgentInterruptedEvent,
   parseAgentStateEvent,
 } from "../agent-control-events.js";
 export type {
+  AgentContent,
+  AgentContentEvent,
   AgentInterruptedEvent,
   AgentStateEvent,
   AgentStateName,

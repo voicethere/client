@@ -48,6 +48,22 @@ export interface AgentStateEvent {
   detail?: string;
 }
 
+/**
+ * Structured content an agent sends next to its reply text (`assistant_content`).
+ * Only `link` exists today; messages with other kinds are ignored.
+ */
+export type AgentContent = { kind: "link"; url: string; label?: string };
+
+/** One `assistant_content` message, paired with its reply by `turnId`. */
+export interface AgentContentEvent {
+  turnId: string;
+  /** Caller utterance the reply answers (voice turns, when the runner sends one). */
+  inReplyTo?: string;
+  /** True for content of a spoken (voice) reply. */
+  spoken: boolean;
+  content: AgentContent;
+}
+
 /** The caller cut the agent off; `replyPlayedMs` is how much of the reply was heard. */
 export interface AgentInterruptedEvent {
   turnId?: string;

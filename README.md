@@ -217,6 +217,31 @@ await connectBrowserSession({
 
 Agents send these events with `@voicethere/agent` 0.11+ on current runners. Older agents send none, so the callbacks simply never fire. `onControlMessage` still receives the raw payloads.
 
+## Links from the agent
+
+Agents built on `@voicethere/agent` 0.22+ take links out of what they speak and send each one as an `assistant_content` message. Pass `onAgentContent` to show them, for example as a clickable link under the reply:
+
+```typescript
+await connectBrowserSession({
+  mode: "voice",
+  credentials: provision.credentials,
+  onAgentContent: ({ turnId, spoken, content }) => {
+    if (content.kind !== "link") return;
+    const a = document.createElement("a");
+    a.href = content.url;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = content.label ?? content.url;
+    appendToTurn(turnId, a);
+  },
+});
+```
+
+- Only `https:` links are reported. Other schemes, malformed URLs and content kinds this client does not know are skipped, and `onControlMessage` still receives the raw message.
+- `spoken` is `true` when the link belongs to a voice reply. A voice turn that held only a link may have no spoken text at all.
+- `parseAgentContentEvent(payload)` applies the same checks to a raw control message.
+- The embed widget renders each link as its own line in the transcript and opens it in a new tab.
+
 ## Spoken text reveal
 
 When the agent speaks, its text arrives as `assistant_delta` (one per sentence, `spoken: true`) and `assistant_done` messages, sent before the audio is heard. Pass `onAgentText` and the session reveals that text word by word while the agent talks, instead of showing every sentence the moment it is sent.
