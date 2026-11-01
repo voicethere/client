@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  parseAgentContentEvent,
   parseAgentInterruptedEvent,
   parseAgentStateEvent,
 } from "./agent-control-events.js";
@@ -69,6 +70,79 @@ describe("agent control events", () => {
       parseAgentInterruptedEvent({
         type: "agent_interrupted",
         replyPlayedMs: -1,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("parseAgentContentEvent", () => {
+  const URL = "https://app.voicethere.dev/docs/pricing";
+
+  it("parses a spoken link with label and inReplyTo", () => {
+    expect(
+      parseAgentContentEvent({
+        type: "assistant_content",
+        turnId: "t1",
+        inReplyTo: "utt-1",
+        spoken: true,
+        content: { kind: "link", url: URL, label: " Pricing " },
+      }),
+    ).toEqual({
+      turnId: "t1",
+      inReplyTo: "utt-1",
+      spoken: true,
+      content: { kind: "link", url: URL, label: "Pricing" },
+    });
+  });
+
+  it("parses a chat link without label as not spoken", () => {
+    expect(
+      parseAgentContentEvent({
+        type: "assistant_content",
+        turnId: "t2",
+        content: { kind: "link", url: URL },
+      }),
+    ).toEqual({
+      turnId: "t2",
+      spoken: false,
+      content: { kind: "link", url: URL },
+    });
+  });
+
+  it("ignores unknown kinds, non-https links, bad URLs and a missing turnId", () => {
+    const base = { type: "assistant_content", turnId: "t" };
+    expect(
+      parseAgentContentEvent({ ...base, content: { kind: "image", url: URL } }),
+    ).toBeNull();
+    expect(
+      parseAgentContentEvent({
+        ...base,
+        content: { kind: "link", url: "http://example.com" },
+      }),
+    ).toBeNull();
+    expect(
+      parseAgentContentEvent({
+        ...base,
+        content: { kind: "link", url: "javascript:alert(1)" },
+      }),
+    ).toBeNull();
+    expect(
+      parseAgentContentEvent({
+        ...base,
+        content: { kind: "link", url: "not a url" },
+      }),
+    ).toBeNull();
+    expect(
+      parseAgentContentEvent({
+        type: "assistant_content",
+        content: { kind: "link", url: URL },
+      }),
+    ).toBeNull();
+    expect(
+      parseAgentContentEvent({
+        type: "assistant_delta",
+        turnId: "t",
+        text: URL,
       }),
     ).toBeNull();
   });

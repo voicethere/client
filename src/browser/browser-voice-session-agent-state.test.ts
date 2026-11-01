@@ -222,6 +222,53 @@ describe("connectBrowserVoiceSession agent state events", () => {
     expect(onControlMessage).toHaveBeenCalledWith({ type: "later", n: 2 });
   });
 
+  it("assistant_content on voice-control calls onAgentContent once and still calls onControlMessage", async () => {
+    const onAgentContent = vi.fn();
+    const onControlMessage = vi.fn();
+    const control = await connect({ onAgentContent, onControlMessage });
+    const message = {
+      type: "assistant_content",
+      turnId: "t1",
+      spoken: true,
+      inReplyTo: "utt-1",
+      content: { kind: "link", url: "https://app.voicethere.dev/docs/pricing" },
+    };
+    control.onmessage?.({ data: JSON.stringify(message) });
+    control.onmessage?.({
+      data: JSON.stringify({
+        type: "assistant_content",
+        turnId: "t1",
+        content: { kind: "link", url: "http://example.com" },
+      }),
+    });
+    expect(onAgentContent).toHaveBeenCalledTimes(1);
+    expect(onAgentContent).toHaveBeenCalledWith({
+      turnId: "t1",
+      spoken: true,
+      inReplyTo: "utt-1",
+      content: { kind: "link", url: "https://app.voicethere.dev/docs/pricing" },
+    });
+    expect(onControlMessage).toHaveBeenCalledWith(message);
+  });
+
+  it("a throwing onAgentContent callback does not stop later control messages", async () => {
+    const onAgentContent = vi.fn(() => {
+      throw new Error("customer bug");
+    });
+    const onControlMessage = vi.fn();
+    const control = await connect({ onAgentContent, onControlMessage });
+    control.onmessage?.({
+      data: JSON.stringify({
+        type: "assistant_content",
+        turnId: "t1",
+        content: { kind: "link", url: "https://example.com/a" },
+      }),
+    });
+    control.onmessage?.({ data: JSON.stringify({ type: "later", n: 3 }) });
+    expect(onAgentContent).toHaveBeenCalledTimes(1);
+    expect(onControlMessage).toHaveBeenCalledWith({ type: "later", n: 3 });
+  });
+
   it("agent_interrupted on voice-control calls onAgentInterrupted", async () => {
     const onAgentInterrupted = vi.fn();
     const control = await connect({ onAgentInterrupted });

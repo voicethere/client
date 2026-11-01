@@ -23,8 +23,13 @@ import type { DebugConsole } from "./debug-console.js";
 import {
   parseAgentInterruptedEvent,
   parseAgentStateEvent,
+  parseAgentContentEvent,
 } from "../agent-control-events.js";
-import type { AgentInterruptedEvent, AgentStateEvent } from "../types.js";
+import type {
+  AgentContentEvent,
+  AgentInterruptedEvent,
+  AgentStateEvent,
+} from "../types.js";
 import {
   buildWebRtcConnectionStatus,
   CONNECTION_INTERRUPTED_MESSAGE,
@@ -265,6 +270,11 @@ export type BrowserVoiceSessionOptions = {
   onAgentState?: (event: AgentStateEvent) => void;
   /** Fired when the caller cut the agent off (`agent_interrupted` on voice-control). Older agents send none. */
   onAgentInterrupted?: (event: AgentInterruptedEvent) => void;
+  /**
+   * Fired once per `assistant_content` message: structured content (today a https link) that belongs
+   * to the reply with the same `turnId`. The URL is not part of the reply text. Older agents send none.
+   */
+  onAgentContent?: (event: AgentContentEvent) => void;
   /** Fired for binary frames on voice-control. */
   onBinaryMessage?: BinaryMessageHandler;
   /** Fired for binary frames on voicethere-sync. */
@@ -853,6 +863,14 @@ export async function connectBrowserVoiceSession(
         options.onAgentInterrupted?.(interrupted);
       } catch (err) {
         debug?.warn("session", "on_agent_interrupted_threw", String(err));
+      }
+    }
+    const content = parseAgentContentEvent(message);
+    if (content) {
+      try {
+        options.onAgentContent?.(content);
+      } catch (err) {
+        debug?.warn("session", "on_agent_content_threw", String(err));
       }
     }
   };

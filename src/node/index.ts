@@ -26,6 +26,12 @@ export type {
   SessionApiRetryRuntime,
 } from "../browser/browser-session.js";
 
+export { parseAgentContentEvent } from "../browser/browser-session.js";
+export type {
+  AgentContent,
+  AgentContentEvent,
+} from "../browser/browser-session.js";
+
 export type {
   BrowserSession,
   BrowserSessionMode,

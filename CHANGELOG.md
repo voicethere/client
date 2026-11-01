@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Links from the agent. New session option `onAgentContent` on `connectBrowserSession`, `connectBrowserVoiceSession` and the `./node` entry receives `assistant_content` messages (sent by `@voicethere/agent` 0.22+) as `{ turnId, inReplyTo?, spoken, content: { kind: "link", url, label? } }`. Only `https:` links are reported; unknown kinds are skipped. `parseAgentContentEvent` and the `AgentContent` / `AgentContentEvent` types are exported from `.`, `./browser` and `./node`. The embed widget shows each link as a clickable line in the transcript that opens in a new tab.
+
 ## [0.17.1] - 2026-10-30
 
 ### Fixed

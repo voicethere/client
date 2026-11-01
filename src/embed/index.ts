@@ -4,6 +4,7 @@ import {
   createDebugConsole,
   startSession,
   unlockAudioPlayback,
+  type AgentContent,
   type BrowserSessionMode,
   type WebRtcConnectionStatus,
 } from "../browser/browser-session.js";
@@ -380,6 +381,38 @@ function appendTranscriptBubble(
   const trimmed = text.trim();
   if (!trimmed) return;
   transcript.append(createTranscriptBubbleElement(role, trimmed));
+  transcript.scrollTop = transcript.scrollHeight;
+}
+
+/**
+ * A link the agent sent as `assistant_content`, as its own incoming bubble.
+ * Only https URLs reach here (`parseAgentContentEvent`); the check is repeated
+ * so the widget never renders another scheme as a link.
+ */
+function appendTranscriptLink(
+  transcript: HTMLElement,
+  content: AgentContent,
+): void {
+  let href: string;
+  try {
+    const url = new URL(content.url);
+    if (url.protocol !== "https:") return;
+    href = url.href;
+  } catch {
+    return;
+  }
+  const bubble = createTranscriptBubbleElement("incoming", "");
+  bubble.textContent = "";
+  const anchor = document.createElement("a");
+  anchor.href = href;
+  anchor.target = "_blank";
+  anchor.rel = "noopener noreferrer";
+  anchor.textContent = content.label?.trim() || href;
+  anchor.style.color = "inherit";
+  anchor.style.textDecoration = "underline";
+  anchor.style.wordBreak = "break-all";
+  bubble.append(anchor);
+  transcript.append(bubble);
   transcript.scrollTop = transcript.scrollHeight;
 }
 
@@ -872,6 +905,11 @@ function buildVoiceThereWidget(
           const incoming = incomingTextFromControlMessage(payload);
           if (incoming) {
             appendTranscriptBubble(transcript, "incoming", incoming);
+          }
+        },
+        onAgentContent: (event) => {
+          if (event.content.kind === "link") {
+            appendTranscriptLink(transcript, event.content);
           }
         },
         onConnectionStatus: (connectionStatus) => {
