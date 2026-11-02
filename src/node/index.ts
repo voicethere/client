@@ -26,10 +26,14 @@ export type {
   SessionApiRetryRuntime,
 } from "../browser/browser-session.js";
 
-export { parseAgentContentEvent } from "../browser/browser-session.js";
+export {
+  parseAgentContentEvent,
+  parseAgentFillerEvent,
+} from "../browser/browser-session.js";
 export type {
   AgentContent,
   AgentContentEvent,
+  AgentFillerEvent,
 } from "../browser/browser-session.js";
 
 export type {

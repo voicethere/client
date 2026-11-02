@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   parseAgentContentEvent,
+  parseAgentFillerEvent,
   parseAgentInterruptedEvent,
   parseAgentStateEvent,
 } from "./agent-control-events.js";
@@ -171,5 +172,32 @@ describe("parseAgentContentEvent", () => {
       });
     expect(at("  " + "L".repeat(250))?.content.label).toHaveLength(200);
     expect(at("   ")?.content).toEqual({ kind: "link", url: URL });
+  });
+});
+
+describe("parseAgentFillerEvent", () => {
+  it("parses a filler with turnId and text", () => {
+    expect(
+      parseAgentFillerEvent({
+        type: "assistant_filler",
+        turnId: "t1",
+        text: "One moment.",
+      }),
+    ).toEqual({ turnId: "t1", text: "One moment." });
+  });
+
+  it("ignores other types and malformed messages", () => {
+    const bad: Record<string, unknown>[] = [
+      { type: "assistant_delta", turnId: "t1", text: "hi" },
+      { type: "assistant_filler", text: "One moment." },
+      { type: "assistant_filler", turnId: "", text: "One moment." },
+      { type: "assistant_filler", turnId: 7, text: "One moment." },
+      { type: "assistant_filler", turnId: "t1" },
+      { type: "assistant_filler", turnId: "t1", text: 42 },
+      { type: "assistant_filler", turnId: "t1", text: "   " },
+    ];
+    for (const payload of bad) {
+      expect(parseAgentFillerEvent(payload)).toBeNull();
+    }
   });
 });

@@ -242,6 +242,23 @@ await connectBrowserSession({
 - `parseAgentContentEvent(payload)` applies the same checks to a raw control message.
 - The embed widget renders each link as its own line in the transcript and opens it in a new tab.
 
+## Filler phrases from the agent
+
+Agents built on `@voicethere/agent` 0.25+ may speak a short filler such as "one moment" while a tool or lookup runs, and send the phrase as an `assistant_filler` message. Pass `onAgentFiller` to show it, for example as a status line:
+
+```typescript
+await connectBrowserSession({
+  mode: "voice",
+  credentials: provision.credentials,
+  onAgentFiller: ({ turnId, text }) => showStatus(turnId, text),
+});
+```
+
+- The callback fires once per spoken filler with `{ turnId, text }`.
+- A filler is not part of the reply. `onAgentText` never reports it and it is never joined to the reply text for the turn, so a transcript built from `onAgentText` stays clean.
+- Messages without a string `turnId` and a non-empty string `text` are ignored, and `onControlMessage` still receives the raw message.
+- `parseAgentFillerEvent(payload)` applies the same checks to a raw control message.
+
 ## Spoken text reveal
 
 When the agent speaks, its text arrives as `assistant_delta` (one per sentence, `spoken: true`) and `assistant_done` messages, sent before the audio is heard. Pass `onAgentText` and the session reveals that text word by word while the agent talks, instead of showing every sentence the moment it is sent.
