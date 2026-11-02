@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-02
+
 ### Added
 
 - Filler phrases from the agent. New session option `onAgentFiller` on `connectBrowserSession`, `connectBrowserVoiceSession` and the `./node` entry receives `assistant_filler` messages (sent by `@voicethere/agent` 0.25+) as `{ turnId, text }`, once per spoken filler ("one moment"). A filler is never part of the reply text: `onAgentText` does not report it. Messages without a string `turnId` and a non-empty string `text` are ignored. `parseAgentFillerEvent` and the `AgentFillerEvent` type are exported from `.`, `./browser` and `./node`.
