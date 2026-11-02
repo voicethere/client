@@ -269,6 +269,73 @@ describe("connectBrowserVoiceSession agent state events", () => {
     expect(onControlMessage).toHaveBeenCalledWith({ type: "later", n: 3 });
   });
 
+  it("assistant_filler calls onAgentFiller once, never reaches onAgentText, and still calls onControlMessage", async () => {
+    const onAgentFiller = vi.fn();
+    const onAgentText = vi.fn();
+    const onControlMessage = vi.fn();
+    const control = await connect({
+      onAgentFiller,
+      onAgentText,
+      onControlMessage,
+      spokenTextReveal: "immediate",
+    });
+    const message = {
+      type: "assistant_filler",
+      turnId: "t1",
+      text: "One moment.",
+    };
+    control.onmessage?.({ data: JSON.stringify(message) });
+    control.onmessage?.({
+      data: JSON.stringify({ type: "assistant_filler", turnId: "t1" }),
+    });
+    control.onmessage?.({
+      data: JSON.stringify({ type: "assistant_filler", text: "x" }),
+    });
+    control.onmessage?.({
+      data: JSON.stringify({
+        type: "assistant_delta",
+        turnId: "t1",
+        spoken: true,
+        text: "Here you go.",
+      }),
+    });
+    control.onmessage?.({
+      data: JSON.stringify({
+        type: "assistant_done",
+        turnId: "t1",
+        spoken: true,
+        text: "Here you go.",
+      }),
+    });
+    expect(onAgentFiller).toHaveBeenCalledTimes(1);
+    expect(onAgentFiller).toHaveBeenCalledWith({
+      turnId: "t1",
+      text: "One moment.",
+    });
+    expect(onControlMessage).toHaveBeenCalledWith(message);
+    for (const call of onAgentText.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("One moment");
+    }
+  });
+
+  it("a throwing onAgentFiller callback does not stop later control messages", async () => {
+    const onAgentFiller = vi.fn(() => {
+      throw new Error("customer bug");
+    });
+    const onControlMessage = vi.fn();
+    const control = await connect({ onAgentFiller, onControlMessage });
+    control.onmessage?.({
+      data: JSON.stringify({
+        type: "assistant_filler",
+        turnId: "t1",
+        text: "One moment.",
+      }),
+    });
+    control.onmessage?.({ data: JSON.stringify({ type: "later", n: 4 }) });
+    expect(onAgentFiller).toHaveBeenCalledTimes(1);
+    expect(onControlMessage).toHaveBeenCalledWith({ type: "later", n: 4 });
+  });
+
   it("agent_interrupted on voice-control calls onAgentInterrupted", async () => {
     const onAgentInterrupted = vi.fn();
     const control = await connect({ onAgentInterrupted });

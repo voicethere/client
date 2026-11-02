@@ -64,6 +64,15 @@ export interface AgentContentEvent {
   content: AgentContent;
 }
 
+/**
+ * One `assistant_filler` message: a short phrase the agent spoke while it worked ("one moment").
+ * It is not part of the reply text, so it is never reported through `onAgentText`.
+ */
+export interface AgentFillerEvent {
+  turnId: string;
+  text: string;
+}
+
 /** The caller cut the agent off; `replyPlayedMs` is how much of the reply was heard. */
 export interface AgentInterruptedEvent {
   turnId?: string;

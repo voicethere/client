@@ -53,12 +53,14 @@ export {
 } from "./spoken-text-reveal.js";
 export {
   parseAgentContentEvent,
+  parseAgentFillerEvent,
   parseAgentInterruptedEvent,
   parseAgentStateEvent,
 } from "./agent-control-events.js";
 export type {
   AgentContent,
   AgentContentEvent,
+  AgentFillerEvent,
   AgentInterruptedEvent,
   AgentStateEvent,
   AgentStateName,

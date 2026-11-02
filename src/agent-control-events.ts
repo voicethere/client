@@ -1,5 +1,6 @@
 import type {
   AgentContentEvent,
+  AgentFillerEvent,
   AgentInterruptedEvent,
   AgentStateEvent,
 } from "./types.js";
@@ -85,4 +86,18 @@ export function parseAgentContentEvent(
     event.inReplyTo = payload.inReplyTo;
   }
   return event;
+}
+
+/**
+ * Parse an `assistant_filler` payload; returns null for anything else, and for
+ * a message without a string `turnId` and a non-empty string `text`.
+ */
+export function parseAgentFillerEvent(
+  payload: Record<string, unknown>,
+): AgentFillerEvent | null {
+  if (payload.type !== "assistant_filler") return null;
+  const { turnId, text } = payload;
+  if (typeof turnId !== "string" || turnId.length === 0) return null;
+  if (typeof text !== "string" || text.trim().length === 0) return null;
+  return { turnId, text };
 }

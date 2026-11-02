@@ -24,9 +24,11 @@ import {
   parseAgentInterruptedEvent,
   parseAgentStateEvent,
   parseAgentContentEvent,
+  parseAgentFillerEvent,
 } from "../agent-control-events.js";
 import type {
   AgentContentEvent,
+  AgentFillerEvent,
   AgentInterruptedEvent,
   AgentStateEvent,
 } from "../types.js";
@@ -275,6 +277,11 @@ export type BrowserVoiceSessionOptions = {
    * to the reply with the same `turnId`. The URL is not part of the reply text. Older agents send none.
    */
   onAgentContent?: (event: AgentContentEvent) => void;
+  /**
+   * Fired once per `assistant_filler` message: a short phrase the agent spoke while it worked.
+   * It is never part of the reply text reported by `onAgentText`. Older agents send none.
+   */
+  onAgentFiller?: (event: AgentFillerEvent) => void;
   /** Fired for binary frames on voice-control. */
   onBinaryMessage?: BinaryMessageHandler;
   /** Fired for binary frames on voicethere-sync. */
@@ -871,6 +878,14 @@ export async function connectBrowserVoiceSession(
         options.onAgentContent?.(content);
       } catch (err) {
         debug?.warn("session", "on_agent_content_threw", String(err));
+      }
+    }
+    const filler = parseAgentFillerEvent(message);
+    if (filler) {
+      try {
+        options.onAgentFiller?.(filler);
+      } catch (err) {
+        debug?.warn("session", "on_agent_filler_threw", String(err));
       }
     }
   };
