@@ -65,7 +65,9 @@ class MockPeerConnection {
     return sender;
   }
 
-  async setRemoteDescription(description: RTCSessionDescriptionInit): Promise<void> {
+  async setRemoteDescription(
+    description: RTCSessionDescriptionInit,
+  ): Promise<void> {
     this.remoteDescription = description;
   }
 
@@ -75,7 +77,9 @@ class MockPeerConnection {
     return { type: "answer", sdp: "v=0" };
   }
 
-  async setLocalDescription(description: RTCSessionDescriptionInit): Promise<void> {
+  async setLocalDescription(
+    description: RTCSessionDescriptionInit,
+  ): Promise<void> {
     this.localDescription = description;
     this.iceGatheringState = "complete";
     this.onicegatheringstatechange?.();
@@ -135,6 +139,24 @@ function createLiveMicRuntime(deviceId = "mic-1"): {
 }
 
 describe("connectBrowserVoiceSession microphone APIs", () => {
+  it("silentMic never calls getUserMedia and sends the synthetic track", async () => {
+    MockWebSocket.instances = [];
+    MockPeerConnection.instances = [];
+    const { runtime } = createLiveMicRuntime();
+    const getUserMedia = vi.fn(runtime.getUserMedia!);
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: true,
+      silentMic: true,
+      readiness: "data",
+      runtime: { ...runtime, getUserMedia },
+    });
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(session.getAudioInputState()).toBe("unavailable");
+    expect(session.getMicStream()).not.toBeNull();
+    session.disconnect();
+  });
+
   it("connects with synthetic outbound audio when getUserMedia is denied", async () => {
     MockWebSocket.instances = [];
     MockPeerConnection.instances = [];
