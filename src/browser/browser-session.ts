@@ -48,6 +48,13 @@ export type ConnectBrowserSessionOptions = {
   onDiagnosticEvent?: BrowserVoiceSessionOptions["onDiagnosticEvent"];
   /** Preferred audio input device for voice / voice+data sessions. */
   audioInputDeviceId?: string;
+  /**
+   * Voice sessions send a silent track and never ask for the microphone
+   * (the synthetic-input path, as when getUserMedia is unavailable).
+   */
+  silentMic?: boolean;
+  /** Injectable WebRTC runtime (default: browser globals). */
+  runtime?: BrowserVoiceSessionOptions["runtime"];
   /** Fired when inbound agent audio playback starts or is blocked by the browser. */
   onAudioPlayback?: BrowserVoiceSessionOptions["onAudioPlayback"];
 };
@@ -115,6 +122,8 @@ export async function connectBrowserSession(
     iceTransportPolicy: options.iceTransportPolicy,
     onDiagnosticEvent: options.onDiagnosticEvent,
     audioInputDeviceId: requestMic ? options.audioInputDeviceId : undefined,
+    silentMic: requestMic ? options.silentMic : undefined,
+    runtime: options.runtime,
     onAudioPlayback: options.onAudioPlayback,
   });
 

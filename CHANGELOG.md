@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-11-03
+
+### Added
+
+- Embed widget host hooks (programmatic only, never in CDN config). Each runs after the widget's own handling, and a hook that throws is logged with `console.warn` and never breaks the widget:
+  - `onSession(session | null)`: the live session after each connect and after a same-session reconnect, and `null` when the session is gone. Use it for `sendToAgent`, `sendChat` and the rest of the session API.
+  - `onSessionEnd({ reason: "closed" | "error", error? })`: once per session, on disconnect, a lost connection, a session error or `destroy()`.
+  - `onAgentAudioTrack(track)`: the agent's audio track, after the widget attached its own audio.
+  - `onControlMessage(message)`: read-only tap of every agent control message, after the widget rendered it.
+  - `onStatus({ text, loading, error })`: every change of the status line.
+  - `audio: { deviceId?, silent? }`: preferred microphone (`deviceId: { ideal }`), or a silent track with no microphone request.
+  - `runtime`: an injectable WebRTC runtime (`WebRtcRuntime`) for host tests.
+- `connectBrowserSession` and `connectBrowserVoiceSession` accept `silentMic`; `connectBrowserSession` forwards `runtime`.
+
+### Changed
+
+- The widget shows a session error's message in the status line (unless the error is marked recoverable).
+
 ## [0.20.0] - 2026-11-03
 
 ### Added

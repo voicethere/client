@@ -119,4 +119,45 @@ describe("connectBrowserSession", () => {
     );
     expect(session.mode).toBe("chat");
   });
+
+  it("forwards runtime, silentMic and audioInputDeviceId for voice sessions only", async () => {
+    connectBrowserVoiceSession.mockResolvedValue({
+      disconnect: vi.fn(),
+    });
+    const credentials = (mode: "voice" | "chat") => ({
+      session_id: "s",
+      mode,
+      room_id: "r",
+      join_token: "j",
+      signaling_url: "ws://127.0.0.1:8080/ws",
+      ice_servers: [],
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const runtime = {} as never;
+    await connectBrowserSession({
+      mode: "voice",
+      credentials: credentials("voice"),
+      runtime,
+      silentMic: true,
+      audioInputDeviceId: "mic-1",
+    });
+    expect(connectBrowserVoiceSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        runtime,
+        silentMic: true,
+        audioInputDeviceId: "mic-1",
+      }),
+    );
+    await connectBrowserSession({
+      mode: "chat",
+      credentials: credentials("chat"),
+      runtime,
+      silentMic: true,
+      audioInputDeviceId: "mic-1",
+    });
+    const chatCall = connectBrowserVoiceSession.mock.calls.at(-1)![0];
+    expect(chatCall.runtime).toBe(runtime);
+    expect(chatCall.silentMic).toBeUndefined();
+    expect(chatCall.audioInputDeviceId).toBeUndefined();
+  });
 });

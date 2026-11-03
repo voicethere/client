@@ -5,10 +5,13 @@ import {
   startSession,
   unlockAudioPlayback,
   type AgentContent,
+  type BrowserSession,
   type BrowserSessionMode,
   type StartSessionResult,
   type WebRtcConnectionStatus,
+  type WebRtcRuntime,
 } from "../browser/browser-session.js";
+import type { SessionErrorEvent } from "../session-errors.js";
 import type { AudioInputState } from "../browser/microphone.js";
 import {
   bootstrapIdentityFromDocument,
@@ -102,6 +105,22 @@ export {
   type SpokenTextRevealMode,
 } from "../spoken-text-reveal.js";
 
+/** The status line the widget shows, passed to {@link VoiceThereWidgetOptions.onStatus}. */
+export type VoiceThereWidgetStatus = {
+  text: string;
+  /** A spinner is shown (connecting, waiting for capacity, reconnecting). */
+  loading: boolean;
+  /** Shown in the warning colour (lost connection, session error). */
+  error: boolean;
+};
+
+/** Why a session ended, passed to {@link VoiceThereWidgetOptions.onSessionEnd}. */
+export type VoiceThereWidgetSessionEnd = {
+  reason: "closed" | "error";
+  /** A `SessionErrorEvent` for session errors, the recovery state when the connection was lost. */
+  error?: unknown;
+};
+
 export type VoiceThereWidgetOptions = {
   /**
    * Client API key (`vthc_…`). Required unless `startSession` is set.
@@ -132,6 +151,31 @@ export type VoiceThereWidgetOptions = {
   positionOffset?: WidgetPositionOffset;
   customCss?: string;
   streamSpokenText?: boolean;
+  /**
+   * Host hooks (programmatic only, never in CDN config). Each runs after the
+   * widget's own handling. A hook that throws is logged with `console.warn`
+   * and never breaks the widget.
+   *
+   * Called with the live session after each connect and after a same-session
+   * reconnect, and with `null` when the session is gone.
+   */
+  onSession?: (session: BrowserSession | null) => void;
+  /** Called once per session when it ends (disconnect, lost connection, session error, destroy). */
+  onSessionEnd?: (info: VoiceThereWidgetSessionEnd) => void;
+  /** The agent's audio track, after the widget has attached its own audio. */
+  onAgentAudioTrack?: (track: MediaStreamTrack) => void;
+  /** Read-only tap of every agent control message, after the widget rendered it. */
+  onControlMessage?: (message: Record<string, unknown>) => void;
+  /** Every change of the status line the widget shows. */
+  onStatus?: (status: VoiceThereWidgetStatus) => void;
+  /**
+   * Microphone options for voice sessions. `deviceId` is the preferred input
+   * (`deviceId: { ideal }` for getUserMedia); `silent` sends a silent track
+   * and never asks for the microphone.
+   */
+  audio?: { deviceId?: string; silent?: boolean };
+  /** Injectable WebRTC runtime (default: browser globals), for host tests. */
+  runtime?: WebRtcRuntime;
 };
 
 export type VoiceThereWidget = {
@@ -160,7 +204,27 @@ type ResolvedVoiceThereWidgetOptions = {
   streamSpokenText: boolean;
   /** Plain `chat_reply` is paced too (only an explicit `true`). */
   paceChatReply: boolean;
+  onSession?: VoiceThereWidgetOptions["onSession"];
+  onSessionEnd?: VoiceThereWidgetOptions["onSessionEnd"];
+  onAgentAudioTrack?: VoiceThereWidgetOptions["onAgentAudioTrack"];
+  onControlMessage?: VoiceThereWidgetOptions["onControlMessage"];
+  onStatus?: VoiceThereWidgetOptions["onStatus"];
+  audio?: VoiceThereWidgetOptions["audio"];
+  runtime?: VoiceThereWidgetOptions["runtime"];
 };
+
+/** Run a host hook after the widget's own handling; a throw never breaks the widget. */
+function callHost<A extends unknown[]>(
+  hook: ((...args: A) => void) | undefined,
+  ...args: A
+): void {
+  if (!hook) return;
+  try {
+    hook(...args);
+  } catch (error) {
+    console.warn("VoiceThere widget: host callback threw", error);
+  }
+}
 
 function mergeWidgetOptions(
   inline: VoiceThereWidgetOptions,
@@ -212,6 +276,13 @@ function mergeWidgetOptions(
       (inline.streamSpokenText ?? remote?.streamSpokenText) !== false,
     paceChatReply:
       (inline.streamSpokenText ?? remote?.streamSpokenText) === true,
+    onSession: inline.onSession,
+    onSessionEnd: inline.onSessionEnd,
+    onAgentAudioTrack: inline.onAgentAudioTrack,
+    onControlMessage: inline.onControlMessage,
+    onStatus: inline.onStatus,
+    audio: inline.audio,
+    runtime: inline.runtime,
   };
 }
 
@@ -661,6 +732,7 @@ function buildVoiceThereWidget(
     statusSpinner.style.display = loading ? "inline-block" : "none";
     // Same amber as the mic / playback warnings.
     statusText.style.color = isError ? "#fcd34d" : "";
+    callHost(runtime.onStatus, { text, loading, error: isError });
   };
   let lastRecoveryState: string | undefined;
   let restoredNoticeUntilMs = 0;
@@ -906,6 +978,14 @@ function buildVoiceThereWidget(
   mount.append(root);
 
   let session: Awaited<ReturnType<typeof connectBrowserSession>> | null = null;
+  // Set when the current session has been reported to onSessionEnd.
+  let sessionEndReported = true;
+  const reportSessionEnd = (info: VoiceThereWidgetSessionEnd) => {
+    if (sessionEndReported) return;
+    sessionEndReported = true;
+    callHost(runtime.onSession, null);
+    callHost(runtime.onSessionEnd, info);
+  };
   let isOpen = false;
   let startAbortController: AbortController | null = null;
 
@@ -999,7 +1079,11 @@ function buildVoiceThereWidget(
   };
 
   const refreshMicNotice = () => {
-    if (!session || !isVoiceSessionMode(session.mode)) {
+    if (
+      !session ||
+      !isVoiceSessionMode(session.mode) ||
+      runtime.audio?.silent
+    ) {
       micWarning.style.display = "none";
       return;
     }
@@ -1034,6 +1118,7 @@ function buildVoiceThereWidget(
         spokenCaption.dispose();
         hideSessionNotices();
         setStatusDisplay("Disconnected");
+        reportSessionEnd({ reason: "closed" });
         connectBtn.textContent = "Connect";
         connectBtn.title = "";
         return;
@@ -1090,44 +1175,59 @@ function buildVoiceThereWidget(
         return;
       }
 
+      const handleWidgetControl = (payload: Record<string, unknown>) => {
+        const spokenAssistant =
+          payload.spoken === true &&
+          (payload.type === "assistant_delta" ||
+            payload.type === "assistant_done");
+        if (
+          spokenAssistant ||
+          (runtime.streamSpokenText && runtime.paceChatReply)
+        ) {
+          // Spoken turns, and every agent message when chat replies are paced too.
+          spokenCaption.handleControlMessage(payload);
+          return;
+        }
+        if (runtime.streamSpokenText && payload.type === "speech_event") {
+          // Default: speech events only pace spoken turns; typed text below is unchanged.
+          spokenCaption.handleControlMessage(payload);
+        }
+        const incoming = incomingTextFromControlMessage(payload);
+        if (incoming) {
+          const kind = controlMessageKind(payload);
+          // The caller's own words sit on the user side, like typed chat.
+          addBubble(
+            kind === "speech" ? "outgoing" : "incoming",
+            kind,
+            incoming,
+            {
+              turnId:
+                typeof payload.turnId === "string" ? payload.turnId : undefined,
+            },
+          );
+        }
+      };
+
       session = await connectBrowserSession({
         mode,
         credentials: started.credentials,
         audioElement: inboundAudio,
         onDebugEvent: debug,
+        runtime: runtime.runtime,
+        audioInputDeviceId: runtime.audio?.deviceId,
+        silentMic: runtime.audio?.silent === true ? true : undefined,
+        onSessionError: (event: SessionErrorEvent) => {
+          if (event.recoverable !== true) {
+            setStatusDisplay(event.message, false, true);
+          }
+          reportSessionEnd({ reason: "error", error: event });
+        },
+        onAgentAudioTrack: (track) => {
+          callHost(runtime.onAgentAudioTrack, track);
+        },
         onControlMessage: (payload) => {
-          const spokenAssistant =
-            payload.spoken === true &&
-            (payload.type === "assistant_delta" ||
-              payload.type === "assistant_done");
-          if (
-            spokenAssistant ||
-            (runtime.streamSpokenText && runtime.paceChatReply)
-          ) {
-            // Spoken turns, and every agent message when chat replies are paced too.
-            spokenCaption.handleControlMessage(payload);
-            return;
-          }
-          if (runtime.streamSpokenText && payload.type === "speech_event") {
-            // Default: speech events only pace spoken turns; typed text below is unchanged.
-            spokenCaption.handleControlMessage(payload);
-          }
-          const incoming = incomingTextFromControlMessage(payload);
-          if (incoming) {
-            const kind = controlMessageKind(payload);
-            // The caller's own words sit on the user side, like typed chat.
-            addBubble(
-              kind === "speech" ? "outgoing" : "incoming",
-              kind,
-              incoming,
-              {
-                turnId:
-                  typeof payload.turnId === "string"
-                    ? payload.turnId
-                    : undefined,
-              },
-            );
-          }
+          handleWidgetControl(payload);
+          callHost(runtime.onControlMessage, payload);
         },
         onAgentContent: (event) => {
           if (event.content.kind === "link") {
@@ -1157,6 +1257,7 @@ function buildVoiceThereWidget(
             hideSessionNotices();
             connectBtn.textContent = "Connect";
             connectBtn.title = "";
+            reportSessionEnd({ reason: "error", error: recovery });
             return;
           }
           if (recovery?.state === "restored") {
@@ -1177,6 +1278,9 @@ function buildVoiceThereWidget(
           }
           setStatusDisplay(formatWebRtcStatus(connectionStatus));
         },
+        onReconnected: () => {
+          if (session) callHost(runtime.onSession, session);
+        },
         onReconnecting: (attempt) => {
           if (lastRecoveryState === "interrupted") return;
           setStatusDisplay(`Reconnecting (${attempt})…`, true);
@@ -1187,9 +1291,11 @@ function buildVoiceThereWidget(
         },
       });
 
+      sessionEndReported = false;
       await session.waitForConnected();
       setStatusDisplay(formatWebRtcStatus(session.getConnectionStatus()));
       refreshMicNotice();
+      callHost(runtime.onSession, session);
       connectBtn.textContent = "Disconnect";
       connectBtn.title =
         "Disconnect this session. Connect again to start a new orchestrator session.";
@@ -1247,6 +1353,8 @@ function buildVoiceThereWidget(
       startAbortController?.abort();
       spokenCaption.dispose();
       session?.disconnect();
+      session = null;
+      reportSessionEnd({ reason: "closed" });
       inboundAudio.remove();
       root.remove();
     },

@@ -1679,3 +1679,166 @@ describe("createVoiceThereWidget bubbles, times, inline display and session prov
     expect(timeOf(bubble)).toBeDefined();
   });
 });
+
+describe("createVoiceThereWidget host hooks", () => {
+  const connect = async (extra: Record<string, unknown> = {}) => {
+    const widget = createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      mode: BrowserSessionModeType.Chat,
+      mount: mount as unknown as HTMLElement,
+      ...extra,
+    });
+    findButtonByText(mount, "Connect")!.click();
+    await vi.waitFor(() => expect(connectBrowserSession).toHaveBeenCalled());
+    const session = await connectBrowserSession.mock.results[0]!.value;
+    // Let waitForConnected and the code after it settle.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const opts = connectBrowserSession.mock.calls[0]![0] as Record<
+      string,
+      (...args: unknown[]) => void
+    >;
+    return { widget, session, opts };
+  };
+
+  it("onSession gets the live session once per connect, again on reconnect, and null when it ends", async () => {
+    const onSession = vi.fn();
+    const { session, opts } = await connect({ onSession });
+    expect(onSession).toHaveBeenCalledTimes(1);
+    expect(onSession).toHaveBeenLastCalledWith(session);
+
+    opts.onReconnected!(1);
+    expect(onSession).toHaveBeenCalledTimes(2);
+    expect(onSession).toHaveBeenLastCalledWith(session);
+
+    findButtonByText(mount, "Disconnect")!.click();
+    expect(onSession).toHaveBeenCalledTimes(3);
+    expect(onSession).toHaveBeenLastCalledWith(null);
+  });
+
+  it("onSessionEnd fires once with reason closed on disconnect and not again on destroy", async () => {
+    const onSessionEnd = vi.fn();
+    const { widget } = await connect({ onSessionEnd });
+    findButtonByText(mount, "Disconnect")!.click();
+    widget.destroy();
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+    expect(onSessionEnd).toHaveBeenCalledWith({ reason: "closed" });
+  });
+
+  it("onSessionEnd fires once with the session error, and a later lost connection does not repeat it", async () => {
+    const onSessionEnd = vi.fn();
+    const { opts } = await connect({ onSessionEnd });
+    const event = {
+      type: "session_error",
+      code: "SESSION_IDLE_TIMEOUT",
+      message: "Session ended: idle",
+      session_id: "s",
+      recoverable: false,
+    };
+    opts.onSessionError!(event);
+    opts.onConnectionStatus!({ recovery: { state: "lost", message: "gone" } });
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+    expect(onSessionEnd).toHaveBeenCalledWith({
+      reason: "error",
+      error: event,
+    });
+    const statusLine = createdElements.find((el) =>
+      el.classList.contains(WIDGET_CSS_CLASSES.status),
+    )!;
+    expect(statusLine.children[1]!.textContent).toBe("gone");
+  });
+
+  it("onSessionEnd reports a lost connection as an error", async () => {
+    const onSessionEnd = vi.fn();
+    const { opts } = await connect({ onSessionEnd });
+    const recovery = { state: "lost", message: "gone" };
+    opts.onConnectionStatus!({ recovery });
+    expect(onSessionEnd).toHaveBeenCalledWith({
+      reason: "error",
+      error: recovery,
+    });
+  });
+
+  it("onAgentAudioTrack and onControlMessage receive the same arguments the session gave", async () => {
+    const onAgentAudioTrack = vi.fn();
+    const onControlMessage = vi.fn();
+    const { opts } = await connect({ onAgentAudioTrack, onControlMessage });
+    const track = { kind: "audio" };
+    opts.onAgentAudioTrack!(track);
+    expect(onAgentAudioTrack).toHaveBeenCalledTimes(1);
+    expect(onAgentAudioTrack).toHaveBeenCalledWith(track);
+
+    const message = { type: "chat_reply", text: "hi", turnId: "t1" };
+    opts.onControlMessage!(message);
+    expect(onControlMessage).toHaveBeenCalledTimes(1);
+    expect(onControlMessage).toHaveBeenCalledWith(message);
+    // The widget rendered it before the host saw it.
+    expect(
+      createdElements.some(
+        (el) =>
+          el.textContent === "hi" ||
+          el.children.some((c) => c.textContent === "hi"),
+      ),
+    ).toBe(true);
+  });
+
+  it("onStatus gets each status line change", async () => {
+    const onStatus = vi.fn();
+    await connect({ onStatus });
+    expect(onStatus).toHaveBeenCalledWith({
+      text: "Connecting…",
+      loading: true,
+      error: false,
+    });
+    expect(onStatus).toHaveBeenLastCalledWith({
+      text: "Connected",
+      loading: false,
+      error: false,
+    });
+  });
+
+  it("a throwing host hook is logged and does not break the widget", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const boom = () => {
+      throw new Error("boom");
+    };
+    const { opts } = await connect({
+      onSession: boom,
+      onSessionEnd: boom,
+      onStatus: boom,
+      onControlMessage: boom,
+      onAgentAudioTrack: boom,
+    });
+    opts.onControlMessage!({ type: "chat_reply", text: "still drawn" });
+    opts.onAgentAudioTrack!({});
+    expect(warn).toHaveBeenCalled();
+    expect(
+      createdElements.some(
+        (el) =>
+          el.textContent === "still drawn" ||
+          el.children.some((c) => c.textContent === "still drawn"),
+      ),
+    ).toBe(true);
+    findButtonByText(mount, "Disconnect")!.click();
+    warn.mockRestore();
+  });
+
+  it("audio.deviceId, audio.silent and runtime reach connectBrowserSession", async () => {
+    const runtime = { WebSocket: class {}, RTCPeerConnection: class {} };
+    const { opts } = await connect({
+      audio: { deviceId: "mic-7", silent: true },
+      runtime,
+    });
+    expect(opts.audioInputDeviceId).toBe("mic-7");
+    expect(opts.silentMic).toBe(true);
+    expect(opts.runtime).toBe(runtime);
+  });
+
+  it("without audio options connectBrowserSession gets no device and no silent flag", async () => {
+    const { opts } = await connect();
+    expect(opts.audioInputDeviceId).toBeUndefined();
+    expect(opts.silentMic).toBeUndefined();
+    expect(opts.runtime).toBeUndefined();
+  });
+});

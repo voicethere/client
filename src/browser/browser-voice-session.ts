@@ -234,6 +234,8 @@ export type BrowserVoiceSessionOptions = {
   preferStereoPlayback?: boolean;
   /** Preferred audio input device id (`deviceId: { ideal }` for getUserMedia). */
   audioInputDeviceId?: string;
+  /** Skip the microphone request and send the synthetic silent track. */
+  silentMic?: boolean;
   /**
    * `silent` (default) — SDK pumps silent 20 ms frames on the mic track after connect.
    * `external` — caller owns `writeSample` on the mic track (load tests, scripted PCM).
@@ -1637,7 +1639,7 @@ export async function connectBrowserVoiceSession(
 
   if (options.requestMic !== false) {
     const result = await acquireAudioInput({
-      getUserMedia: runtime.getUserMedia,
+      getUserMedia: options.silentMic ? undefined : runtime.getUserMedia,
       deviceId: options.audioInputDeviceId,
     });
     applyMicAcquisition(result);
