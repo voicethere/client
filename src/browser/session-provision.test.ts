@@ -613,3 +613,64 @@ describe("startSession customerContext and buildId", () => {
     expect(result.ok).toBe(true);
   });
 });
+
+describe("startSession end-user options", () => {
+  const baseOptions = {
+    apiBase: "https://sessions.example/v1",
+    projectId: PROJECT_ID,
+    pollIntervalMs: 1,
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function stubSyncFetch() {
+    const fetchMock = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({
+        session_id: "orch-1",
+        mode: "voice",
+        join_token: "jt",
+        signaling_url: "wss://sig.example/ws",
+        room_id: "room-1",
+        ice_servers: [],
+        expires_at: "2026-07-01T11:00:00.000Z",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  function posted(fetchMock: ReturnType<typeof vi.fn>) {
+    return JSON.parse(
+      (fetchMock.mock.calls[0]![1] as { body: string }).body,
+    ) as Record<string, unknown>;
+  }
+
+  it("sends endUserToken as end_user_token", async () => {
+    const fetchMock = stubSyncFetch();
+    await startSession({ ...baseOptions, endUserToken: "tok" });
+    const body = posted(fetchMock);
+    expect(body.end_user_token).toBe("tok");
+    expect("end_user" in body).toBe(false);
+  });
+
+  it("sends endUser as end_user", async () => {
+    const fetchMock = stubSyncFetch();
+    await startSession({ ...baseOptions, endUser: { id: "u1" } });
+    expect(posted(fetchMock).end_user).toEqual({ id: "u1" });
+  });
+
+  it("throws TypeError before any request when both are set", async () => {
+    const fetchMock = stubSyncFetch();
+    const error = await startSession({
+      ...baseOptions,
+      endUserToken: "tok",
+      endUser: { id: "u1" },
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TypeError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

@@ -174,6 +174,40 @@ if (provision.ok) {
 
 Legacy `{ type: "agent_error" }` payloads are mapped to `AGENT_CHILD_CRASHED`. See platform docs for the full error code catalog.
 
+### End-user identity
+
+Tell the platform who is signed in to your app, so the agent can load that person's account and history.
+
+```typescript
+const provision = await startSession({
+  apiBase: "https://sessions.example/v1",
+  projectId,
+  headers: { Authorization: `Bearer ${apiKey}` },
+  // A signed token your backend issues. Use `endUser: { id }` instead for an
+  // unverified id. Setting both throws a TypeError before any request.
+  endUserToken,
+});
+
+const session = await connectBrowserSession({
+  mode: "voice",
+  credentials: provision.credentials,
+  // Needed for session.identify().
+  apiBase: "https://sessions.example/v1",
+  projectId,
+  apiHeaders: { Authorization: `Bearer ${apiKey}` },
+  onIdentityConflict: (error) => console.warn(error.code),
+});
+
+// The user signs in during the call:
+const user = await session.identify({ endUserToken: freshToken });
+// -> { id, verified, result: "updated" | "unchanged" }
+
+// The user signs out: closes the session with reason "end_user_logout".
+await session.logout();
+```
+
+`identify` rejects with `EndUserRejectedError` (token not accepted), `EndUserConflictError` (the session already belongs to another user), or `EndUserAuthUnavailableError` (`retryable: true`; the project's verifier could not be reached). All extend `EndUserIdentityError`, which carries `code` and `httpStatus`.
+
 ### Root connection error handler
 
 For process-wide logging (signaling socket drops, WebRTC failures, and session errors) without

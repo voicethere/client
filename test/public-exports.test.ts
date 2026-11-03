@@ -46,6 +46,10 @@ const EXPECTED_EXPORTS: Record<string, string[]> = {
     "ConnectionError",
     "CustomerContextTooLargeError",
     "DEFAULT_SESSION_API_RETRY_DELAYS_MS",
+    "EndUserAuthUnavailableError",
+    "EndUserConflictError",
+    "EndUserIdentityError",
+    "EndUserRejectedError",
     "LOCAL_SESSION_ERROR_CODES",
     "MAX_CUSTOMER_CONTEXT_BYTES",
     "ProvisionedRunnerModeType",
@@ -137,6 +141,10 @@ const EXPECTED_EXPORTS: Record<string, string[]> = {
     "CLIENT_CAPABILITIES",
     "CustomerContextTooLargeError",
     "DEFAULT_SESSION_API_RETRY_DELAYS_MS",
+    "EndUserAuthUnavailableError",
+    "EndUserConflictError",
+    "EndUserIdentityError",
+    "EndUserRejectedError",
     "MAX_CUSTOMER_CONTEXT_BYTES",
     "NodeWebSocketAdapter",
     "ProvisionedRunnerModeType",
@@ -166,6 +174,8 @@ const EXPECTED_EXPORTS: Record<string, string[]> = {
 
 /** Exported from a module but deliberately not part of any public subpath. name -> reason. */
 const INTERNAL: Record<string, string> = {
+  postEndUserIdentify: "used by browser-voice-session.ts",
+  assertEndUserOptions: "used by startSession and browser-voice-session.ts",
   parseLegacyAgentError: "used by browser-voice-session.ts",
   emitDiagnosticSafely: "used by browser-voice-session.ts",
   isWebRtcConnectRetryError: "used by browser-voice-session.ts",

@@ -73,6 +73,17 @@ export type StartSessionOptions = {
    * plain object of at most {@link MAX_CUSTOMER_CONTEXT_BYTES} bytes as JSON.
    */
   customerContext?: Record<string, unknown>;
+  /**
+   * Signed token that identifies the signed-in end user of your app. The
+   * project verifies it (shared key, JWKS or callback). Mutually exclusive
+   * with {@link endUser}.
+   */
+  endUserToken?: string;
+  /**
+   * Unverified end-user id from a browser key. Mutually exclusive with
+   * {@link endUserToken}; the session counts as unverified.
+   */
+  endUser?: { id: string };
   async?: boolean;
   /**
    * When true (default), poll GET /v1/sessions/:id while waiting — each poll
@@ -134,6 +145,16 @@ function assertCustomerContext(value: unknown): void {
     throw new CustomerContextTooLargeError(
       `customerContext is ${bytes} bytes; the limit is ${MAX_CUSTOMER_CONTEXT_BYTES}`,
     );
+  }
+}
+
+/** Thrown before any request when both `endUserToken` and `endUser` are set. */
+export function assertEndUserOptions(input: {
+  endUserToken?: string;
+  endUser?: { id: string };
+}): void {
+  if (input.endUserToken !== undefined && input.endUser !== undefined) {
+    throw new TypeError("Set either endUserToken or endUser, not both");
   }
 }
 
@@ -210,6 +231,7 @@ export async function startSession(
   options: StartSessionOptions,
 ): Promise<StartSessionResult> {
   assertCustomerContext(options.customerContext);
+  assertEndUserOptions(options);
   const apiBase = options.apiBase.replace(/\/$/, "");
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -222,6 +244,10 @@ export async function startSession(
     ...(options.customerContext !== undefined
       ? { customer_context: options.customerContext }
       : {}),
+    ...(options.endUserToken !== undefined
+      ? { end_user_token: options.endUserToken }
+      : {}),
+    ...(options.endUser !== undefined ? { end_user: options.endUser } : {}),
     async: options.async ?? true,
     wait_for_capacity: options.waitForCapacity ?? true,
   };
