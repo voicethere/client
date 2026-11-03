@@ -18,6 +18,9 @@ describe("embed entry host hook types", () => {
     expectTypeOf<
       NonNullable<VoiceThereWidgetOptions["onStatus"]>
     >().parameters.toEqualTypeOf<[VoiceThereWidgetStatus]>();
+    expectTypeOf<
+      NonNullable<VoiceThereWidgetOptions["isLinkAllowed"]>
+    >().parameters.toEqualTypeOf<[URL]>();
     expectTypeOf<VoiceThereWidgetOptions["runtime"]>().toEqualTypeOf<
       WebRtcRuntime | undefined
     >();

@@ -171,6 +171,13 @@ export type VoiceThereWidgetOptions = {
   /** Every change of the status line the widget shows. */
   onStatus?: (status: VoiceThereWidgetStatus) => void;
   /**
+   * Decides which agent links (https URLs the agent sends) are clickable. A
+   * link it rejects, or a call that throws (logged with `console.warn`), is
+   * shown as plain text with the link icon. Absent: every https link is
+   * clickable.
+   */
+  isLinkAllowed?: (url: URL) => boolean;
+  /**
    * Microphone options for voice sessions. `deviceId` is the preferred input
    * (`deviceId: { ideal }` for getUserMedia); `silent` sends a silent track
    * and never asks for the microphone.
@@ -211,6 +218,7 @@ type ResolvedVoiceThereWidgetOptions = {
   onAgentAudioTrack?: VoiceThereWidgetOptions["onAgentAudioTrack"];
   onControlMessage?: VoiceThereWidgetOptions["onControlMessage"];
   onStatus?: VoiceThereWidgetOptions["onStatus"];
+  isLinkAllowed?: VoiceThereWidgetOptions["isLinkAllowed"];
   audio?: VoiceThereWidgetOptions["audio"];
   runtime?: VoiceThereWidgetOptions["runtime"];
 };
@@ -283,6 +291,7 @@ function mergeWidgetOptions(
     onAgentAudioTrack: inline.onAgentAudioTrack,
     onControlMessage: inline.onControlMessage,
     onStatus: inline.onStatus,
+    isLinkAllowed: inline.isLinkAllowed,
     audio: inline.audio,
     runtime: inline.runtime,
   };
@@ -875,31 +884,46 @@ function buildVoiceThereWidget(
     const textEl = bubbleTextElement.get(bubble);
     textEl?.remove();
     bubbleTextElement.delete(bubble);
-    bubble.style.cursor = "pointer";
     bubble.style.border = "1px solid currentColor";
-    const anchor = document.createElement("a");
-    anchor.href = url.href;
-    anchor.target = "_blank";
-    anchor.rel = "noopener noreferrer";
-    anchor.style.color = "inherit";
-    anchor.style.textDecoration = "none";
-    anchor.style.display = "flex";
-    anchor.style.alignItems = "center";
-    anchor.style.gap = "6px";
-    anchor.style.wordBreak = "break-all";
+    let allowed = true;
+    if (runtime.isLinkAllowed) {
+      try {
+        allowed = runtime.isLinkAllowed(url) === true;
+      } catch (error) {
+        console.warn("VoiceThere widget: host callback threw", error);
+        allowed = false;
+      }
+    }
+    const row = allowed
+      ? document.createElement("a")
+      : document.createElement("span");
+    row.style.color = "inherit";
+    row.style.textDecoration = "none";
+    row.style.display = "flex";
+    row.style.alignItems = "center";
+    row.style.gap = "6px";
+    row.style.wordBreak = "break-all";
     const icon = document.createElement("span");
     icon.setAttribute("aria-hidden", "true");
     icon.style.display = "inline-flex";
     icon.innerHTML = LINK_ICON_SVG;
     const label = document.createElement("span");
     label.textContent = content.label?.trim() || linkLabelFromUrl(url);
-    anchor.append(icon, label);
-    bubble.append(anchor);
-    // The whole bubble is the button: a click outside the anchor follows it.
-    bubble.addEventListener("click", (event: { target?: unknown }) => {
-      if (event.target instanceof Node && anchor.contains(event.target)) return;
-      anchor.click();
-    });
+    row.append(icon, label);
+    bubble.append(row);
+    if (allowed) {
+      const anchor = row as HTMLAnchorElement;
+      anchor.href = url.href;
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
+      bubble.style.cursor = "pointer";
+      // The whole bubble is the button: a click outside the anchor follows it.
+      bubble.addEventListener("click", (event: { target?: unknown }) => {
+        if (event.target instanceof Node && anchor.contains(event.target))
+          return;
+        anchor.click();
+      });
+    }
     attachTime(bubble, new Date());
     transcript.append(bubble);
     transcript.scrollTop = transcript.scrollHeight;
