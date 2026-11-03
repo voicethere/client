@@ -23,6 +23,11 @@ export type ConnectBrowserSessionOptions = {
   audioElement?: HTMLAudioElement;
   onDebugEvent?: DebugConsole;
   customerContext?: Record<string, unknown>;
+  /** Needed for `session.identify()`: the session API root, project id and start headers. */
+  apiBase?: BrowserVoiceSessionOptions["apiBase"];
+  projectId?: BrowserVoiceSessionOptions["projectId"];
+  apiHeaders?: BrowserVoiceSessionOptions["apiHeaders"];
+  onIdentityConflict?: BrowserVoiceSessionOptions["onIdentityConflict"];
   onSessionError?: import("../session-errors.js").SessionErrorHandler;
   onControlMessage?: (payload: Record<string, unknown>) => void;
   onAgentState?: BrowserVoiceSessionOptions["onAgentState"];
@@ -100,6 +105,10 @@ export async function connectBrowserSession(
     audioElement: options.audioElement,
     onDebugEvent: options.onDebugEvent,
     customerContext: options.customerContext,
+    apiBase: options.apiBase,
+    projectId: options.projectId,
+    apiHeaders: options.apiHeaders,
+    onIdentityConflict: options.onIdentityConflict,
     onSessionError: options.onSessionError,
     onControlMessage: options.onControlMessage,
     onAgentState: options.onAgentState,
@@ -169,6 +178,14 @@ export type {
   AgentStateEvent,
   AgentStateName,
 } from "../types.js";
+export {
+  EndUserAuthUnavailableError,
+  EndUserConflictError,
+  EndUserIdentityError,
+  EndUserRejectedError,
+  type EndUserIdentifyInput,
+  type EndUserIdentifyResult,
+} from "./end-user-identity.js";
 export {
   CustomerContextTooLargeError,
   MAX_CUSTOMER_CONTEXT_BYTES,

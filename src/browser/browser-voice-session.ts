@@ -18,7 +18,16 @@ import {
   type SessionErrorEvent,
   type SessionErrorHandler,
 } from "../session-errors.js";
-import type { SessionCredentials } from "./session-provision.js";
+import {
+  assertEndUserOptions,
+  type SessionCredentials,
+} from "./session-provision.js";
+import {
+  EndUserConflictError,
+  postEndUserIdentify,
+  type EndUserIdentifyInput,
+  type EndUserIdentifyResult,
+} from "./end-user-identity.js";
 import type { DebugConsole } from "./debug-console.js";
 import {
   parseAgentInterruptedEvent,
@@ -254,6 +263,14 @@ export type BrowserVoiceSessionOptions = {
   onDiagnosticEvent?: VoiceSessionDiagnosticHandler;
   /** Opaque context forwarded to runner/agent on session start. */
   customerContext?: Record<string, unknown>;
+  /** Session API root (e.g. `https://sessions.example/v1`); needed for {@link BrowserVoiceSession.identify}. */
+  apiBase?: string;
+  /** Project id sent with `identify`. */
+  projectId?: string;
+  /** Extra headers for `identify` (the same ones used to start the session). */
+  apiHeaders?: Record<string, string>;
+  /** Called when `identify` finds the session already bound to another end user. */
+  onIdentityConflict?: (error: EndUserConflictError) => void;
   /** Unified handler for session_error DC events and local WebRTC failures. */
   onSessionError?: SessionErrorHandler;
   /** Fired for JSON messages on voice-control (e.g. speech_event). */
@@ -376,6 +393,14 @@ export type BrowserVoiceSession = {
    * Returns strict {@link PeerCloseResult} so callers can observe closed/timed_out/failed.
    */
   disconnectAsync: () => Promise<PeerCloseResult>;
+  /**
+   * Attach (or change) the end user of a running session. Resolves with the
+   * verified user, then nudges the agent with `session_identity_refresh`.
+   * Needs `apiBase` and `projectId` in the connect options.
+   */
+  identify: (input: EndUserIdentifyInput) => Promise<EndUserIdentifyResult>;
+  /** End the session for a signed-out user (closes with reason `end_user_logout`). */
+  logout: () => Promise<PeerCloseResult>;
   /** Ask the server to close this WebRTC leg (graceful close signal on voice-control). */
   sendCloseSignal: (reason?: string) => void;
   sendSpeak: (text: string) => void;
@@ -514,6 +539,8 @@ export async function connectBrowserVoiceSession(
   const peerId = options.peerId ?? defaultPeerId();
   const roomId = options.credentials.room_id;
   const orchestratorSessionId = options.credentials.session_id;
+  // identify sends this: the server checks the digest of the start token, not a reconnect token.
+  const startJoinToken = options.credentials.join_token;
   /** Mutable join credentials — updated by inbound `session_reconnect_token`. */
   const joinCredentials: SessionCredentials = { ...options.credentials };
   const rebuildSignalingUrl = (): string =>
@@ -2708,7 +2735,7 @@ export async function connectBrowserVoiceSession(
     }
   };
 
-  return {
+  const session: BrowserVoiceSession = {
     peerId,
     getMicStream: () => micStream,
     listAudioInputDevices: () => listBrowserAudioInputDevices(),
@@ -2782,6 +2809,54 @@ export async function connectBrowserVoiceSession(
     sendSyncBinary: (data: ArrayBuffer | Uint8Array) => {
       requireOpenSync().send(toArrayBuffer(data));
       debug?.debug("dc", "binary_send", `sync:${data.byteLength}b`);
+    },
+    identify: async (input) => {
+      assertEndUserOptions({
+        endUserToken: "endUserToken" in input ? input.endUserToken : undefined,
+        endUser: "endUser" in input ? input.endUser : undefined,
+      });
+      if (!options.apiBase || !options.projectId) {
+        throw new TypeError(
+          "identify needs apiBase and projectId in the connect options",
+        );
+      }
+      const result = await postEndUserIdentify({
+        apiBase: options.apiBase,
+        orchestratorSessionId,
+        projectId: options.projectId,
+        joinToken: startJoinToken,
+        headers: options.apiHeaders,
+        input,
+      }).catch((error: unknown) => {
+        if (error instanceof EndUserConflictError) {
+          try {
+            options.onIdentityConflict?.(error);
+          } catch {
+            /* callback errors never change the outcome */
+          }
+        }
+        throw error;
+      });
+      try {
+        requireOpenControl().send(
+          JSON.stringify({ type: "session_identity_refresh" }),
+        );
+      } catch (error) {
+        debug?.warn(
+          "session",
+          "identity_refresh_not_sent",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      return result;
+    },
+    logout: async () => {
+      try {
+        session.sendCloseSignal("end_user_logout");
+      } catch {
+        /* control channel not open: still close locally */
+      }
+      return session.disconnectAsync();
     },
     sendCloseSignal: (reason?: string) => {
       gracefulDisconnect = true;
@@ -3008,4 +3083,5 @@ export async function connectBrowserVoiceSession(
       }
     },
   };
+  return session;
 }

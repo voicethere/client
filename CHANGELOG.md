@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-03
+
+### Added
+
+- End-user identity. `startSession` accepts `endUserToken` (signed token) or `endUser: { id }` (unverified id); setting both throws a `TypeError` before any request.
+- `session.identify({ endUserToken } | { endUser })` attaches or changes the end user of a running session and nudges the agent with `session_identity_refresh`. It needs `apiBase` and `projectId` (and `apiHeaders`) in the connect options. Failures throw `EndUserRejectedError`, `EndUserConflictError` (also reported through `onIdentityConflict`) or the retryable `EndUserAuthUnavailableError`, all extending `EndUserIdentityError`.
+- `session.logout()` closes the session with reason `end_user_logout`.
+
 ## [0.22.0] - 2026-11-03
 
 ### Added
