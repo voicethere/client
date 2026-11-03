@@ -8,7 +8,23 @@ export type WidgetMessageRoleTheme = {
   bubble?: string;
 };
 
+export const WIDGET_TIME_FORMATS = ["auto", "12h", "24h"] as const;
+
+export type WidgetTimeFormat = (typeof WIDGET_TIME_FORMATS)[number];
+
+/** Message times under each bubble. On by default; `show: false` hides them. */
+export type WidgetTimestampsTheme = {
+  show?: boolean;
+  format?: WidgetTimeFormat;
+  color?: string;
+};
+
+export const WIDGET_DISPLAYS = ["launcher", "inline"] as const;
+
+export type WidgetDisplay = (typeof WIDGET_DISPLAYS)[number];
+
 export type VoiceThereWidgetChatTheme = {
+  timestamps?: WidgetTimestampsTheme;
   incoming?: WidgetMessageRoleTheme;
   outgoing?: WidgetMessageRoleTheme;
   headerBackground?: string;
@@ -82,6 +98,7 @@ export type VoiceThereWidgetConfigV1 = {
   customCss?: string;
   mode?: WidgetConfigMode;
   streamSpokenText?: boolean;
+  display?: WidgetDisplay;
 };
 
 const ALLOWED_TOP_LEVEL_KEYS = new Set([
@@ -99,6 +116,7 @@ const ALLOWED_TOP_LEVEL_KEYS = new Set([
   "customCss",
   "mode",
   "streamSpokenText",
+  "display",
 ]);
 
 const ALLOWED_THEME_KEYS = new Set([
@@ -110,7 +128,10 @@ const ALLOWED_THEME_KEYS = new Set([
   "chat",
 ]);
 
+const ALLOWED_TIMESTAMPS_KEYS = new Set(["show", "format", "color"]);
+
 const ALLOWED_CHAT_KEYS = new Set([
+  "timestamps",
   "incoming",
   "outgoing",
   "headerBackground",
@@ -269,6 +290,58 @@ function parseMessageRoleTheme(
   return role;
 }
 
+function parseTimestampsTheme(
+  value: unknown,
+): WidgetTimestampsTheme | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainObject(value)) {
+    throw new WidgetConfigError("theme.chat.timestamps must be an object");
+  }
+  assertNoSecretLikeKeys(value, ".theme.chat.timestamps");
+  rejectUnknownKeys(value, ALLOWED_TIMESTAMPS_KEYS, ".theme.chat.timestamps");
+
+  const timestamps: WidgetTimestampsTheme = {};
+  if (value.show !== undefined) {
+    if (typeof value.show !== "boolean") {
+      throw new WidgetConfigError(
+        "theme.chat.timestamps.show must be a boolean",
+      );
+    }
+    timestamps.show = value.show;
+  }
+  if (value.format !== undefined) {
+    if (
+      typeof value.format !== "string" ||
+      !(WIDGET_TIME_FORMATS as readonly string[]).includes(value.format)
+    ) {
+      throw new WidgetConfigError(
+        `theme.chat.timestamps.format must be one of: ${WIDGET_TIME_FORMATS.join(", ")}`,
+      );
+    }
+    timestamps.format = value.format as WidgetTimeFormat;
+  }
+  if (value.color !== undefined) {
+    timestamps.color = parseHexColor(
+      value.color,
+      "theme.chat.timestamps.color",
+    );
+  }
+  return timestamps;
+}
+
+function parseDisplay(value: unknown): WidgetDisplay | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "string" ||
+    !(WIDGET_DISPLAYS as readonly string[]).includes(value)
+  ) {
+    throw new WidgetConfigError(
+      `display must be one of: ${WIDGET_DISPLAYS.join(", ")}`,
+    );
+  }
+  return value as WidgetDisplay;
+}
+
 function parseChatTheme(value: unknown): VoiceThereWidgetChatTheme | undefined {
   if (value === undefined) return undefined;
   if (!isPlainObject(value)) {
@@ -278,6 +351,9 @@ function parseChatTheme(value: unknown): VoiceThereWidgetChatTheme | undefined {
   rejectUnknownKeys(value, ALLOWED_CHAT_KEYS, ".theme.chat");
 
   const chat: VoiceThereWidgetChatTheme = {};
+  if (value.timestamps !== undefined) {
+    chat.timestamps = parseTimestampsTheme(value.timestamps);
+  }
   if (value.incoming !== undefined) {
     chat.incoming = parseMessageRoleTheme(
       value.incoming,
@@ -475,6 +551,7 @@ export function parseVoiceThereWidgetConfigV1(
     customCss: parseCustomCss(input.customCss),
     mode: parseMode(input.mode),
     streamSpokenText: parseStreamSpokenText(input.streamSpokenText),
+    display: parseDisplay(input.display),
   };
 }
 

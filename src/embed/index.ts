@@ -6,6 +6,7 @@ import {
   unlockAudioPlayback,
   type AgentContent,
   type BrowserSessionMode,
+  type StartSessionResult,
   type WebRtcConnectionStatus,
 } from "../browser/browser-session.js";
 import type { AudioInputState } from "../browser/microphone.js";
@@ -22,9 +23,12 @@ import {
   widgetConfigModeToSessionMode,
   type VoiceThereWidgetConfigV1,
   type VoiceThereWidgetTheme,
+  type WidgetDisplay,
   type WidgetPosition,
   type WidgetPositionOffset,
   type WidgetPresetId,
+  type WidgetTimeFormat,
+  type WidgetTimestampsTheme,
 } from "./config.js";
 import {
   WIDGET_CSS_CLASSES,
@@ -42,9 +46,13 @@ import { createSpokenChatCaption } from "../spoken-text-reveal.js";
 export type {
   VoiceThereWidgetConfigV1,
   VoiceThereWidgetTheme,
+  WidgetDisplay,
   WidgetPosition,
   WidgetPositionOffset,
   WidgetPresetId,
+  WidgetTimeFormat,
+  WidgetTimestampsTheme,
+  StartSessionResult,
 };
 export {
   WidgetConfigError,
@@ -52,7 +60,9 @@ export {
   parseVoiceThereWidgetConfigJson,
   parseVoiceThereWidgetConfigV1,
   WIDGET_CONFIG_VERSION,
+  WIDGET_DISPLAYS,
   WIDGET_POSITIONS,
+  WIDGET_TIME_FORMATS,
   WIDGET_PRESET_IDS,
 } from "./config.js";
 export { applyPreset, getWidgetPreset } from "./presets.js";
@@ -93,7 +103,22 @@ export {
 } from "../spoken-text-reveal.js";
 
 export type VoiceThereWidgetOptions = {
-  clientKey: string;
+  /**
+   * Client API key (`vthc_…`). Required unless `startSession` is set.
+   */
+  clientKey?: string;
+  /**
+   * Programmatic only (never in CDN config): starts the session instead of the
+   * `clientKey` request, for hosts that run their own session endpoint. Errors
+   * (a rejected promise or `ok: false`) show in the status line.
+   */
+  startSession?: (signal: AbortSignal) => Promise<StartSessionResult>;
+  /**
+   * `"launcher"` (default): floating launcher button and panel.
+   * `"inline"`: no launcher; the panel fills `mount` and is always open
+   * (`open()` / `close()` do nothing).
+   */
+  display?: WidgetDisplay;
   projectId?: string;
   apiBase?: string;
   mode?: BrowserSessionMode;
@@ -119,7 +144,9 @@ export type VoiceThereWidget = {
 type ResolvedVoiceThereWidgetOptions = {
   projectId: string;
   apiBase: string;
-  clientKey: string;
+  clientKey?: string;
+  startSession?: (signal: AbortSignal) => Promise<StartSessionResult>;
+  display: WidgetDisplay;
   mode: BrowserSessionMode;
   theme?: VoiceThereWidgetTheme;
   mount?: HTMLElement;
@@ -143,15 +170,22 @@ function mergeWidgetOptions(
   const projectId =
     inline.projectId ?? bootstrap?.projectId ?? remote?.projectId;
   const apiBase = inline.apiBase ?? bootstrap?.apiBase ?? remote?.apiBase;
-  if (!projectId) {
-    throw new Error(
-      "VoiceThere widget requires projectId (inline, CDN bootstrap, or configUrl)",
-    );
-  }
-  if (!apiBase) {
-    throw new Error(
-      "VoiceThere widget requires apiBase (inline, CDN bootstrap, or configUrl)",
-    );
+  if (!inline.startSession) {
+    if (!inline.clientKey) {
+      throw new Error(
+        "VoiceThere widget requires clientKey or a startSession provider",
+      );
+    }
+    if (!projectId) {
+      throw new Error(
+        "VoiceThere widget requires projectId (inline, CDN bootstrap, or configUrl)",
+      );
+    }
+    if (!apiBase) {
+      throw new Error(
+        "VoiceThere widget requires apiBase (inline, CDN bootstrap, or configUrl)",
+      );
+    }
   }
 
   const mode =
@@ -160,9 +194,11 @@ function mergeWidgetOptions(
     BrowserSessionModeType.Chat;
 
   return {
-    projectId,
-    apiBase,
+    projectId: projectId ?? "",
+    apiBase: apiBase ?? "",
     clientKey: inline.clientKey,
+    startSession: inline.startSession,
+    display: inline.display ?? remote?.display ?? "launcher",
     mode,
     theme: inline.theme ?? remote?.theme,
     mount: inline.mount,
@@ -201,6 +237,10 @@ export async function createVoiceThereWidgetAsync(
 
   let bootstrapIdentity: WidgetBootstrapIdentity | undefined;
   let appearance: VoiceThereWidgetConfigV1 | undefined;
+  if (!options.clientKey) {
+    // A session provider without a key has no CDN bootstrap to fetch.
+    return buildVoiceThereWidget(mergeWidgetOptions(options));
+  }
   try {
     const bootstrap = await fetchWidgetBootstrapByClientKey({
       clientKey: options.clientKey,
@@ -373,47 +413,44 @@ function syncCustomCssStyle(
 
 type TranscriptRole = "incoming" | "outgoing" | "system";
 
-function appendTranscriptBubble(
-  transcript: HTMLElement,
-  role: TranscriptRole,
-  text: string,
-): void {
-  const trimmed = text.trim();
-  if (!trimmed) return;
-  transcript.append(createTranscriptBubbleElement(role, trimmed));
-  transcript.scrollTop = transcript.scrollHeight;
-}
+/** `data-voicethere-kind` values; tests and host pages key off these. */
+export type TranscriptBubbleKind =
+  "reply" | "filler" | "link" | "speech" | "chat" | "greeting";
+
+/** The text node holder of a bubble, so updating text keeps its `<time>`. */
+const bubbleTextElement = new WeakMap<HTMLElement, HTMLElement>();
+
+const LINK_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
 
 /**
- * A link the agent sent as `assistant_content`, as its own incoming bubble.
- * Only https URLs reach here (`parseAgentContentEvent`); the check is repeated
- * so the widget never renders another scheme as a link.
+ * Formats a message time. `auto` follows the locale; `12h` and `24h` force the
+ * hour cycle. `locale` is for tests; the widget passes none (browser locale).
  */
-function appendTranscriptLink(
-  transcript: HTMLElement,
-  content: AgentContent,
-): void {
-  let href: string;
-  try {
-    const url = new URL(content.url);
-    if (url.protocol !== "https:") return;
-    href = url.href;
-  } catch {
-    return;
-  }
-  const bubble = createTranscriptBubbleElement("incoming", "");
-  bubble.textContent = "";
-  const anchor = document.createElement("a");
-  anchor.href = href;
-  anchor.target = "_blank";
-  anchor.rel = "noopener noreferrer";
-  anchor.textContent = content.label?.trim() || href;
-  anchor.style.color = "inherit";
-  anchor.style.textDecoration = "underline";
-  anchor.style.wordBreak = "break-all";
-  bubble.append(anchor);
-  transcript.append(bubble);
-  transcript.scrollTop = transcript.scrollHeight;
+export function formatWidgetTime(
+  at: Date,
+  format: WidgetTimeFormat = "auto",
+  locale?: string,
+): string {
+  const options: Intl.DateTimeFormatOptions = {
+    hour: format === "24h" ? "2-digit" : "numeric",
+    minute: "2-digit",
+  };
+  if (format === "12h") options.hourCycle = "h12";
+  if (format === "24h") options.hourCycle = "h23";
+  return new Intl.DateTimeFormat(locale, options).format(at);
+}
+
+/** Default link label: host plus path, without a bare trailing slash. */
+function linkLabelFromUrl(url: URL): string {
+  const path = url.pathname === "/" ? "" : url.pathname;
+  return `${url.host}${path}`;
+}
+
+function setBubbleText(bubble: HTMLElement, text: string): void {
+  const textEl = bubbleTextElement.get(bubble);
+  if (textEl) textEl.textContent = text;
+  else bubble.textContent = text;
 }
 
 function createTranscriptBubbleElement(
@@ -448,7 +485,17 @@ function createTranscriptBubbleElement(
   bubble.style.borderRadius = "10px";
   bubble.style.lineHeight = "1.4";
   bubble.style.wordBreak = "break-word";
-  bubble.textContent = text;
+  bubble.setAttribute("data-voicethere-role", role);
+  if (role === "system") {
+    bubble.textContent = text;
+  } else {
+    const textEl = document.createElement("span");
+    textEl.className = WIDGET_CSS_CLASSES.msgText;
+    textEl.style.display = "block";
+    textEl.textContent = text;
+    bubble.append(textEl);
+    bubbleTextElement.set(bubble, textEl);
+  }
   return bubble;
 }
 
@@ -506,6 +553,17 @@ function incomingTextFromControlMessage(
   return null;
 }
 
+/** Which bubble kind a control message becomes (`data-voicethere-kind`). */
+function controlMessageKind(
+  payload: Record<string, unknown>,
+): TranscriptBubbleKind {
+  if (payload.type === "speech_event") {
+    const event = typeof payload.event === "string" ? payload.event : "";
+    return event.includes("agent") ? "reply" : "speech";
+  }
+  return "reply";
+}
+
 function buildVoiceThereWidget(
   initialOptions: ResolvedVoiceThereWidgetOptions,
 ): VoiceThereWidget {
@@ -515,7 +573,8 @@ function buildVoiceThereWidget(
 
   const root = document.createElement("div");
   root.className = WIDGET_CSS_CLASSES.root;
-  root.style.position = "fixed";
+  root.setAttribute("data-voicethere-display", runtime.display);
+  root.style.position = runtime.display === "inline" ? "relative" : "fixed";
   root.style.zIndex = "99999";
   root.style.display = "flex";
   root.style.flexDirection = "column";
@@ -675,21 +734,118 @@ function buildVoiceThereWidget(
   transcript.style.maxHeight = "260px";
   transcript.style.padding = "4px 0";
 
+  const inline = runtime.display === "inline";
+
+  // One `<time>` per bubble, set when the bubble is created and never moved
+  // by later text updates. Show, format and colour follow the live theme.
+  const timeEntries: Array<{ el: HTMLElement; at: Date }> = [];
+  const renderTimeEntry = (entry: { el: HTMLElement; at: Date }) => {
+    const ts = runtime.theme?.chat?.timestamps;
+    entry.el.style.display = ts?.show === false ? "none" : "block";
+    entry.el.style.color = ts?.color ?? "";
+    entry.el.style.opacity = ts?.color ? "1" : "0.6";
+    entry.el.textContent = formatWidgetTime(entry.at, ts?.format ?? "auto");
+  };
+  const attachTime = (bubble: HTMLElement, at: Date) => {
+    const el = document.createElement("time");
+    el.className = WIDGET_CSS_CLASSES.msgTime;
+    el.setAttribute("datetime", at.toISOString());
+    el.style.fontSize = "10px";
+    el.style.marginTop = "2px";
+    el.style.textAlign = "end";
+    const entry = { el, at };
+    timeEntries.push(entry);
+    renderTimeEntry(entry);
+    bubble.append(el);
+  };
+
+  const addBubble = (
+    role: TranscriptRole,
+    kind: TranscriptBubbleKind,
+    text: string,
+    opts: { turnId?: string; muted?: boolean } = {},
+  ): HTMLDivElement | null => {
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    const bubble = createTranscriptBubbleElement(role, trimmed);
+    bubble.setAttribute("data-voicethere-kind", kind);
+    if (opts.turnId) bubble.setAttribute("data-voicethere-turn", opts.turnId);
+    if (kind === "filler") {
+      bubble.classList.add(WIDGET_CSS_CLASSES.msgFiller);
+      bubble.style.opacity = "0.7";
+      bubble.style.fontStyle = "italic";
+    }
+    if (role !== "system") attachTime(bubble, new Date());
+    transcript.append(bubble);
+    transcript.scrollTop = transcript.scrollHeight;
+    return bubble;
+  };
+
+  /**
+   * A link the agent sent as `assistant_content`, as its own incoming bubble at
+   * arrival time, so it never moves. Only https URLs; the check is repeated
+   * here so the widget never renders another scheme as a link.
+   */
+  const addLinkBubble = (content: AgentContent, turnId?: string) => {
+    let url: URL;
+    try {
+      url = new URL(content.url);
+    } catch {
+      return;
+    }
+    if (url.protocol !== "https:") return;
+    const bubble = createTranscriptBubbleElement("incoming", "");
+    bubble.classList.add(WIDGET_CSS_CLASSES.msgLink);
+    bubble.setAttribute("data-voicethere-kind", "link");
+    if (turnId) bubble.setAttribute("data-voicethere-turn", turnId);
+    const textEl = bubbleTextElement.get(bubble);
+    textEl?.remove();
+    bubbleTextElement.delete(bubble);
+    bubble.style.cursor = "pointer";
+    bubble.style.border = "1px solid currentColor";
+    const anchor = document.createElement("a");
+    anchor.href = url.href;
+    anchor.target = "_blank";
+    anchor.rel = "noopener noreferrer";
+    anchor.style.color = "inherit";
+    anchor.style.textDecoration = "none";
+    anchor.style.display = "flex";
+    anchor.style.alignItems = "center";
+    anchor.style.gap = "6px";
+    anchor.style.wordBreak = "break-all";
+    const icon = document.createElement("span");
+    icon.setAttribute("aria-hidden", "true");
+    icon.style.display = "inline-flex";
+    icon.innerHTML = LINK_ICON_SVG;
+    const label = document.createElement("span");
+    label.textContent = content.label?.trim() || linkLabelFromUrl(url);
+    anchor.append(icon, label);
+    bubble.append(anchor);
+    // The whole bubble is the button: a click outside the anchor follows it.
+    bubble.addEventListener("click", (event: { target?: unknown }) => {
+      if (event.target instanceof Node && anchor.contains(event.target)) return;
+      anchor.click();
+    });
+    attachTime(bubble, new Date());
+    transcript.append(bubble);
+    transcript.scrollTop = transcript.scrollHeight;
+  };
+
   const incomingBubbleByUtteranceId = new Map<string, HTMLDivElement>();
 
   const upsertIncomingTranscriptBubble = (
     utteranceId: string,
     visibleText: string,
   ) => {
-    let bubble = incomingBubbleByUtteranceId.get(utteranceId);
-    if (!bubble) {
-      if (!visibleText.trim()) return;
-      bubble = createTranscriptBubbleElement("incoming", visibleText);
-      incomingBubbleByUtteranceId.set(utteranceId, bubble);
-      transcript.append(bubble);
-    } else {
-      bubble.textContent = visibleText;
+    const existing = incomingBubbleByUtteranceId.get(utteranceId);
+    if (!existing) {
+      const created = addBubble("incoming", "reply", visibleText, {
+        turnId: utteranceId,
+      });
+      if (created) incomingBubbleByUtteranceId.set(utteranceId, created);
+      return;
     }
+    setBubbleText(existing, visibleText);
     transcript.scrollTop = transcript.scrollHeight;
   };
 
@@ -741,11 +897,17 @@ function buildVoiceThereWidget(
     transcript,
     composer,
   );
-  root.append(launcher, panel, inboundAudio);
+  if (inline) {
+    closeBtn.style.display = "none";
+    root.append(panel, inboundAudio);
+  } else {
+    root.append(launcher, panel, inboundAudio);
+  }
   mount.append(root);
 
   let session: Awaited<ReturnType<typeof connectBrowserSession>> | null = null;
   let isOpen = false;
+  let startAbortController: AbortController | null = null;
 
   const debug = createDebugConsole(() => {
     /* transcript is primary UI; debug export kept for session wiring */
@@ -760,7 +922,7 @@ function buildVoiceThereWidget(
     }
     greeting.textContent = runtime.greeting ?? "";
     if (runtime.greeting?.trim()) {
-      appendTranscriptBubble(transcript, "system", runtime.greeting);
+      addBubble("system", "greeting", runtime.greeting);
     }
   };
 
@@ -783,6 +945,25 @@ function buildVoiceThereWidget(
       [micRequestBtn, playbackEnableBtn, connectBtn],
       resolvedTheme,
     );
+    if (inline) {
+      // The panel fills the mount; no floating position, no fixed panel size.
+      root.style.position = "relative";
+      root.style.zIndex = "";
+      root.style.top = "";
+      root.style.right = "";
+      root.style.bottom = "";
+      root.style.left = "";
+      root.style.transform = "";
+      root.style.width = "100%";
+      root.style.height = "100%";
+      root.style.alignItems = "stretch";
+      panel.style.width = "100%";
+      panel.style.height = "100%";
+      panel.style.minHeight = "0";
+      transcript.style.maxHeight = "none";
+      transcript.style.minHeight = "0";
+    }
+    for (const entry of timeEntries) renderTimeEntry(entry);
     launcher.textContent = runtime.launcherLabel;
     headerTitle.textContent = runtime.launcherLabel;
     input.style.background = "var(--vt-input-bg)";
@@ -793,8 +974,13 @@ function buildVoiceThereWidget(
   };
 
   applyAppearance();
+  if (inline) {
+    panel.style.display = "flex";
+    root.dataset.vtOpen = "true";
+  }
 
   const setOpen = (open: boolean) => {
+    if (inline) return;
     isOpen = open;
     if (open) {
       panel.style.display = "flex";
@@ -855,24 +1041,48 @@ function buildVoiceThereWidget(
 
       lastRecoveryState = undefined;
       setStatusDisplay("Connecting…", true);
-      const started = await startSession({
-        apiBase: runtime.apiBase,
-        projectId: runtime.projectId,
-        headers: { Authorization: `Bearer ${runtime.clientKey}` },
-        onStatus: (s) => {
-          if (s.status === "waiting") {
-            const position =
-              s.queue_position != null ? ` (position ${s.queue_position})` : "";
-            setStatusDisplay(`Waiting for capacity${position}…`, true);
-          } else if (s.status === "failed") {
-            setStatusDisplay(s.failure_message ?? "Provisioning failed");
-          }
-        },
-        debug,
-      });
+      const startAbort = new AbortController();
+      startAbortController = startAbort;
+      let started: StartSessionResult;
+      if (runtime.startSession) {
+        try {
+          started = await runtime.startSession(startAbort.signal);
+        } catch (error) {
+          started = {
+            ok: false,
+            code: "HTTP_ERROR",
+            message:
+              error instanceof Error && error.message
+                ? error.message
+                : "Could not start the session",
+          };
+        }
+      } else {
+        started = await startSession({
+          apiBase: runtime.apiBase,
+          projectId: runtime.projectId,
+          headers: { Authorization: `Bearer ${runtime.clientKey}` },
+          onStatus: (s) => {
+            if (s.status === "waiting") {
+              const position =
+                s.queue_position != null
+                  ? ` (position ${s.queue_position})`
+                  : "";
+              setStatusDisplay(`Waiting for capacity${position}…`, true);
+            } else if (s.status === "failed") {
+              setStatusDisplay(s.failure_message ?? "Provisioning failed");
+            }
+          },
+          debug,
+        });
+      }
+      if (startAbort.signal.aborted) return;
 
       if (!started.ok) {
-        if (started.httpStatus === 401 || started.httpStatus === 403) {
+        if (
+          runtime.clientKey &&
+          (started.httpStatus === 401 || started.httpStatus === 403)
+        ) {
           // The key was rejected; drop its cached project pointer.
           void clearWidgetKeyPointer(runtime.clientKey).catch(() => undefined);
         }
@@ -904,13 +1114,21 @@ function buildVoiceThereWidget(
           }
           const incoming = incomingTextFromControlMessage(payload);
           if (incoming) {
-            appendTranscriptBubble(transcript, "incoming", incoming);
+            addBubble("incoming", controlMessageKind(payload), incoming, {
+              turnId:
+                typeof payload.turnId === "string" ? payload.turnId : undefined,
+            });
           }
         },
         onAgentContent: (event) => {
           if (event.content.kind === "link") {
-            appendTranscriptLink(transcript, event.content);
+            addLinkBubble(event.content, event.turnId);
           }
+        },
+        onAgentFiller: (event) => {
+          addBubble("incoming", "filler", event.text, {
+            turnId: event.turnId,
+          });
         },
         onConnectionStatus: (connectionStatus) => {
           const recovery = connectionStatus.recovery;
@@ -974,7 +1192,7 @@ function buildVoiceThereWidget(
     const text = input.value.trim();
     if (!text) return;
     session.sendChat(text);
-    appendTranscriptBubble(transcript, "outgoing", text);
+    addBubble("outgoing", "chat", text);
     input.value = "";
   });
 
@@ -1017,6 +1235,7 @@ function buildVoiceThereWidget(
       setOpen(false);
     },
     destroy: () => {
+      startAbortController?.abort();
       spokenCaption.dispose();
       session?.disconnect();
       inboundAudio.remove();

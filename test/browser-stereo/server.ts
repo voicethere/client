@@ -216,6 +216,8 @@ export type StereoMixServer = {
    * channel, then tear the session down.
    */
   sendTimeLimitCloseAndTeardown(peerId: string, sessionId: string, message: string): Promise<void>;
+  /** Sends one control-channel message to every connected voice client, once at least one has joined. */
+  sendToAllClients(message: Record<string, unknown>): Promise<void>;
   close(): Promise<void>;
 };
 
@@ -373,6 +375,17 @@ export async function startStereoMixServer(): Promise<StereoMixServer> {
       ctx.sendToClient({ type: "session_close", code: "max_session_length", message });
       await ctx.flushToClient?.();
       await pod.teardownSession(sessionId, "max_session_length");
+    },
+    async sendToAllClients(message) {
+      const deadline = Date.now() + 20_000;
+      while (peerContexts.size === 0) {
+        if (Date.now() > deadline) throw new Error("no voice context joined");
+        await delay(50);
+      }
+      for (const ctx of peerContexts.values()) {
+        ctx.sendToClient(message);
+        await ctx.flushToClient?.();
+      }
     },
     async close() {
       stopped = true;
