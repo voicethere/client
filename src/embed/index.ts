@@ -121,6 +121,8 @@ export type VoiceThereWidgetSessionEnd = {
   error?: unknown;
 };
 
+export type { BrowserSession, WebRtcRuntime };
+
 export type VoiceThereWidgetOptions = {
   /**
    * Client API key (`vthc_…`). Required unless `startSession` is set.
@@ -1220,7 +1222,10 @@ function buildVoiceThereWidget(
           if (event.recoverable !== true) {
             setStatusDisplay(event.message, false, true);
           }
-          reportSessionEnd({ reason: "error", error: event });
+          // Only an explicit `recoverable: false` is terminal.
+          if (event.recoverable === false) {
+            reportSessionEnd({ reason: "error", error: event });
+          }
         },
         onAgentAudioTrack: (track) => {
           callHost(runtime.onAgentAudioTrack, track);
@@ -1292,7 +1297,21 @@ function buildVoiceThereWidget(
       });
 
       sessionEndReported = false;
-      await session.waitForConnected();
+      const connecting = session;
+      try {
+        await connecting.waitForConnected();
+      } catch (error) {
+        if (session !== connecting) return;
+        connecting.disconnect();
+        session = null;
+        spokenCaption.dispose();
+        hideSessionNotices();
+        setStatusDisplay("Could not connect", false, true);
+        connectBtn.textContent = "Connect";
+        connectBtn.title = "";
+        reportSessionEnd({ reason: "error", error });
+        return;
+      }
       setStatusDisplay(formatWebRtcStatus(session.getConnectionStatus()));
       refreshMicNotice();
       callHost(runtime.onSession, session);

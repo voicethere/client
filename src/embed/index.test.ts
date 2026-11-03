@@ -1841,4 +1841,60 @@ describe("createVoiceThereWidget host hooks", () => {
     expect(opts.silentMic).toBeUndefined();
     expect(opts.runtime).toBeUndefined();
   });
+
+  it("a recoverable session error does not end the session for the host", async () => {
+    const onSession = vi.fn();
+    const onSessionEnd = vi.fn();
+    const { opts } = await connect({ onSession, onSessionEnd });
+    onSession.mockClear();
+    opts.onSessionError!({
+      type: "session_error",
+      code: "RUNNER_INTERNAL",
+      message: "x",
+      session_id: "s",
+      recoverable: true,
+    });
+    expect(onSessionEnd).not.toHaveBeenCalled();
+    expect(onSession).not.toHaveBeenCalled();
+    findButtonByText(mount, "Disconnect")!.click();
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+    expect(onSessionEnd).toHaveBeenCalledWith({ reason: "closed" });
+  });
+
+  it("a failed connect reports the session end once and never hands out the session", async () => {
+    const onSession = vi.fn();
+    const onSessionEnd = vi.fn();
+    const failure = new Error("timeout");
+    connectBrowserSession.mockResolvedValueOnce({
+      mode: BrowserSessionModeType.Chat,
+      disconnect: vi.fn(),
+      waitForConnected: vi.fn(async () => {
+        throw failure;
+      }),
+      getConnectionStatus: () => ({}),
+      getAudioInputState: () => "live" as const,
+      sendChat: vi.fn(),
+    });
+    createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      mode: BrowserSessionModeType.Chat,
+      mount: mount as unknown as HTMLElement,
+      onSession,
+      onSessionEnd,
+    });
+    findButtonByText(mount, "Connect")!.click();
+    await vi.waitFor(() => expect(onSessionEnd).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+    expect(onSessionEnd).toHaveBeenCalledWith({
+      reason: "error",
+      error: failure,
+    });
+    expect(onSession).not.toHaveBeenCalledWith(
+      expect.objectContaining({ waitForConnected: expect.anything() }),
+    );
+    expect(findButtonByText(mount, "Connect")).toBeDefined();
+  });
 });

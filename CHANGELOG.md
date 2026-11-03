@@ -12,13 +12,15 @@
   - `onAgentAudioTrack(track)`: the agent's audio track, after the widget attached its own audio.
   - `onControlMessage(message)`: read-only tap of every agent control message, after the widget rendered it.
   - `onStatus({ text, loading, error })`: every change of the status line.
-  - `audio: { deviceId?, silent? }`: preferred microphone (`deviceId: { ideal }`), or a silent track with no microphone request.
+  - `audio: { deviceId?, silent? }`: preferred microphone (`deviceId: { ideal }`), or a silent track with no microphone request. `deviceId` is a preference (`ideal`), not a guarantee; a host that needs a specific device calls `session.setAudioInputDevice` from `onSession`.
   - `runtime`: an injectable WebRTC runtime (`WebRtcRuntime`) for host tests.
+- Types exported from `@voicethere/client/embed`: `BrowserSession`, `WebRtcRuntime`, `VoiceThereWidgetStatus`, `VoiceThereWidgetSessionEnd`.
 - `connectBrowserSession` and `connectBrowserVoiceSession` accept `silentMic`; `connectBrowserSession` forwards `runtime`.
 
 ### Changed
 
-- The widget shows a session error's message in the status line (unless the error is marked recoverable).
+- The widget shows a session error's message in the status line (unless the error is marked recoverable). Only a session error with `recoverable: false` ends the session for `onSessionEnd`.
+- A connect that fails before the session is ready (for example a timeout) now resets the button to Connect, shows "Could not connect" and reports `onSessionEnd({ reason: "error" })`; `onSession` is not called.
 
 ## [0.20.0] - 2026-11-03
 
