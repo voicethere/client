@@ -2032,6 +2032,136 @@ describe("createVoiceThereWidget host hooks", () => {
     expect(findButtonByText(mount, "Disconnect")).toBeDefined();
   });
 
+  const statusText = () => {
+    const statusLine = createdElements.find((el) =>
+      el.classList.contains(WIDGET_CSS_CLASSES.status),
+    )!;
+    return statusLine.children[1]!.textContent;
+  };
+
+  const widgetFor = (extra: Record<string, unknown>) =>
+    createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      mode: BrowserSessionModeType.Chat,
+      mount: mount as unknown as HTMLElement,
+      ...extra,
+    });
+
+  it("Cancel while the built-in startSession is pending aborts its signal and never connects", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const onSessionEnd = vi.fn();
+      startSession.mockImplementationOnce(
+        (opts: { signal: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            opts.signal.addEventListener("abort", () =>
+              reject(new Error("aborted")),
+            );
+          }),
+      );
+      widgetFor({ onSessionEnd });
+      findButtonByText(mount, "Connect")!.click();
+      await vi.waitFor(() => expect(startSession).toHaveBeenCalled());
+      findButtonByText(mount, "Cancel")!.click();
+      await vi.waitFor(() =>
+        expect(findButtonByText(mount, "Connect")).toBeDefined(),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(
+        (startSession.mock.calls[0]![0] as { signal: AbortSignal }).signal
+          .aborted,
+      ).toBe(true);
+      expect(connectBrowserSession).not.toHaveBeenCalled();
+      expect(statusText()).toBe("Disconnected");
+      expect(onSessionEnd).not.toHaveBeenCalled();
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it("Cancel while a startSession provider is pending aborts the provider signal", async () => {
+    const onSession = vi.fn();
+    const onSessionEnd = vi.fn();
+    let providerSignal!: AbortSignal;
+    let resolveProvider!: (value: unknown) => void;
+    const provider = vi.fn((signal: AbortSignal) => {
+      providerSignal = signal;
+      return new Promise((resolve) => {
+        resolveProvider = resolve;
+      });
+    });
+    widgetFor({
+      clientKey: undefined,
+      startSession: provider,
+      onSession,
+      onSessionEnd,
+    });
+    findButtonByText(mount, "Connect")!.click();
+    await vi.waitFor(() => expect(provider).toHaveBeenCalled());
+    findButtonByText(mount, "Cancel")!.click();
+    expect(providerSignal.aborted).toBe(true);
+    resolveProvider({
+      ok: true,
+      credentials: {
+        session_id: "s",
+        mode: "chat",
+        room_id: "r",
+        join_token: "j",
+        signaling_url: "ws://127.0.0.1:8080/ws",
+        ice_servers: [],
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      },
+    });
+    await vi.waitFor(() =>
+      expect(findButtonByText(mount, "Connect")).toBeDefined(),
+    );
+    expect(connectBrowserSession).not.toHaveBeenCalled();
+    expect(onSession).not.toHaveBeenCalled();
+    expect(onSessionEnd).not.toHaveBeenCalled();
+  });
+
+  it("Cancel while waitForConnected is pending ends the session once and never hands it out", async () => {
+    const onSession = vi.fn();
+    const onSessionEnd = vi.fn();
+    let resolveConnected!: () => void;
+    const disconnect = vi.fn();
+    const session = {
+      mode: BrowserSessionModeType.Chat,
+      disconnect,
+      waitForConnected: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveConnected = resolve;
+          }),
+      ),
+      getConnectionStatus: () => ({}),
+      getAudioInputState: () => "live" as const,
+      sendChat: vi.fn(),
+    };
+    connectBrowserSession.mockResolvedValueOnce(session);
+    widgetFor({ onSession, onSessionEnd });
+    findButtonByText(mount, "Connect")!.click();
+    await vi.waitFor(() => expect(session.waitForConnected).toHaveBeenCalled());
+    findButtonByText(mount, "Cancel")!.click();
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+    expect(onSessionEnd).toHaveBeenCalledWith({ reason: "closed" });
+    onSession.mockClear();
+    resolveConnected();
+    await vi.waitFor(() =>
+      expect(findButtonByText(mount, "Connect")).toBeDefined(),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onSession).not.toHaveBeenCalledWith(session);
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+    expect(statusText()).toBe("Disconnected");
+  });
+
   it("onDebugEvent receives every debug event of the widget's console, and a throwing hook breaks nothing", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const onDebugEvent = vi.fn(() => {

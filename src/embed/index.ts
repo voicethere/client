@@ -1169,21 +1169,36 @@ function buildVoiceThereWidget(
         };
       }
     } else {
-      started = await startSession({
-        apiBase: runtime.apiBase,
-        projectId: runtime.projectId,
-        headers: { Authorization: `Bearer ${runtime.clientKey}` },
-        onStatus: (s) => {
-          if (s.status === "waiting") {
-            const position =
-              s.queue_position != null ? ` (position ${s.queue_position})` : "";
-            setStatusDisplay(`Waiting for capacity${position}…`, true);
-          } else if (s.status === "failed") {
-            setStatusDisplay(s.failure_message ?? "Provisioning failed");
-          }
-        },
-        debug,
-      });
+      try {
+        started = await startSession({
+          apiBase: runtime.apiBase,
+          projectId: runtime.projectId,
+          headers: { Authorization: `Bearer ${runtime.clientKey}` },
+          onStatus: (s) => {
+            if (s.status === "waiting") {
+              const position =
+                s.queue_position != null
+                  ? ` (position ${s.queue_position})`
+                  : "";
+              setStatusDisplay(`Waiting for capacity${position}…`, true);
+            } else if (s.status === "failed") {
+              setStatusDisplay(s.failure_message ?? "Provisioning failed");
+            }
+          },
+          debug,
+          signal: startAbort.signal,
+        });
+      } catch (error) {
+        // startSession rejects when the signal aborts.
+        started = {
+          ok: false,
+          code: "HTTP_ERROR",
+          message:
+            error instanceof Error && error.message
+              ? error.message
+              : "Could not start the session",
+        };
+      }
     }
     if (startAbort.signal.aborted) return;
 
