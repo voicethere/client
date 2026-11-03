@@ -417,6 +417,10 @@ export type BrowserVoiceSession = {
   /** Active input device id from the live track settings, or null when synthetic. */
   getAudioInputDeviceId: () => string | null;
   getAudioInputState: () => AudioInputState;
+  /** Mute or unmute the microphone. Muted tracks stay attached and send silence (`MediaStreamTrack.enabled = false`); a track acquired later (device switch, re-request) starts muted. */
+  setMicMuted: (muted: boolean) => void;
+  /** True while the microphone is muted with {@link setMicMuted}. */
+  isMicMuted: () => boolean;
   /**
    * Switch microphone mid-session via `RTCRtpSender.replaceTrack`.
    * `null` selects the default device. Falls back to synthetic on GUM failure.
@@ -555,6 +559,7 @@ export async function connectBrowserVoiceSession(
   let controlChannel: RTCDataChannel | null = null;
   let syncChannel: RTCDataChannel | null = null;
   let micStream: MediaStream | null = null;
+  let micMuted = false;
   let micRtpSender: RTCRtpSender | null = null;
   let audioInputState: AudioInputState = "synthetic";
   let audioInputDeviceId: string | null = null;
@@ -782,6 +787,10 @@ export async function connectBrowserVoiceSession(
     audioInputDeviceId = null;
   };
 
+  const applyMicMute = (): void => {
+    for (const t of micStream?.getAudioTracks() ?? []) t.enabled = !micMuted;
+  };
+
   const applyMicAcquisition = (
     result: Awaited<ReturnType<typeof acquireAudioInput>>,
   ): void => {
@@ -790,6 +799,7 @@ export async function connectBrowserVoiceSession(
     audioInputState = result.state;
     audioInputDeviceId = result.deviceId;
     disposeMicHandle = result.dispose;
+    applyMicMute();
   };
 
   const restartMicPumpIfConnected = (): void => {
@@ -2741,6 +2751,12 @@ export async function connectBrowserVoiceSession(
     listAudioInputDevices: () => listBrowserAudioInputDevices(),
     getAudioInputDeviceId: () => audioInputDeviceId,
     getAudioInputState: () => audioInputState,
+    setMicMuted: (muted: boolean) => {
+      micMuted = muted;
+      applyMicMute();
+      debug?.info("audio", muted ? "mic_muted" : "mic_unmuted");
+    },
+    isMicMuted: () => micMuted,
     setAudioInputDevice: async (deviceId: string | null) => {
       await switchAudioInput(deviceId);
     },

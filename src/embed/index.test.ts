@@ -325,6 +325,8 @@ beforeEach(() => {
       syncChannelOpen: true,
     }),
     getAudioInputState: () => "denied" as const,
+    setMicMuted: vi.fn(),
+    isMicMuted: () => false,
     requestAudioInputAccess,
     unlockAudioPlayback: vi.fn(async () => true),
     getAudioPlaybackState: () => "idle" as const,
@@ -2261,5 +2263,123 @@ describe("createVoiceThereWidget host hooks", () => {
       expect.objectContaining({ waitForConnected: expect.anything() }),
     );
     expect(findButtonByText(mount, "Connect")).toBeDefined();
+  });
+
+  describe("Mute button", () => {
+    const voiceSession = (calls: string[] = []) => ({
+      mode: BrowserSessionModeType.Voice,
+      disconnect: vi.fn(),
+      waitForConnected: vi.fn(async () => undefined),
+      getConnectionStatus: () => ({}),
+      getAudioInputState: () => "live" as const,
+      setMicMuted: vi.fn((muted: boolean) => {
+        calls.push(`mute:${muted}`);
+      }),
+      isMicMuted: () => false,
+      unlockAudioPlayback: vi.fn(async () => true),
+      getAudioPlaybackState: () => "idle" as const,
+      sendChat: vi.fn(),
+    });
+
+    const widgetIn = (
+      mode: BrowserSessionModeType,
+      extra: Record<string, unknown> = {},
+    ) =>
+      createVoiceThereWidget({
+        projectId: "p",
+        apiBase: "https://api.example.com",
+        clientKey: "key",
+        mode,
+        mount: mount as unknown as HTMLElement,
+        ...extra,
+      });
+
+    const muteEl = () =>
+      createdElements.find((el) =>
+        el.classList.contains(WIDGET_CSS_CLASSES.mute),
+      )!;
+
+    it("toggles the session mic and its label", async () => {
+      const session = voiceSession();
+      connectBrowserSession.mockResolvedValueOnce(session);
+      widgetIn(BrowserSessionModeType.Voice);
+      findButtonByText(mount, "Connect")!.click();
+      await vi.waitFor(() =>
+        expect(findButtonByText(mount, "Disconnect")).toBeDefined(),
+      );
+      session.setMicMuted.mockClear();
+      findButtonByText(mount, "Mute")!.click();
+      expect(session.setMicMuted).toHaveBeenLastCalledWith(true);
+      expect(muteEl().textContent).toBe("Unmute");
+      expect(muteEl().getAttribute("aria-pressed")).toBe("true");
+      findButtonByText(mount, "Unmute")!.click();
+      expect(session.setMicMuted).toHaveBeenLastCalledWith(false);
+      expect(muteEl().textContent).toBe("Mute");
+      expect(muteEl().getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("Mute before Connect applies to the new session before it is handed out", async () => {
+      const calls: string[] = [];
+      const session = voiceSession(calls);
+      connectBrowserSession.mockResolvedValueOnce(session);
+      const onSession = vi.fn(() => {
+        calls.push("onSession");
+      });
+      widgetIn(BrowserSessionModeType.Voice, { onSession });
+      findButtonByText(mount, "Mute")!.click();
+      findButtonByText(mount, "Connect")!.click();
+      await vi.waitFor(() => expect(onSession).toHaveBeenCalled());
+      expect(calls.indexOf("mute:true")).toBeGreaterThanOrEqual(0);
+      expect(calls.indexOf("mute:true")).toBeLessThan(
+        calls.indexOf("onSession"),
+      );
+    });
+
+    it("the mute choice holds for the next session", async () => {
+      const first = voiceSession();
+      const second = voiceSession();
+      connectBrowserSession
+        .mockResolvedValueOnce(first)
+        .mockResolvedValueOnce(second);
+      widgetIn(BrowserSessionModeType.Voice);
+      findButtonByText(mount, "Connect")!.click();
+      await vi.waitFor(() =>
+        expect(findButtonByText(mount, "Disconnect")).toBeDefined(),
+      );
+      findButtonByText(mount, "Mute")!.click();
+      findButtonByText(mount, "Disconnect")!.click();
+      findButtonByText(mount, "Connect")!.click();
+      await vi.waitFor(() =>
+        expect(findButtonByText(mount, "Disconnect")).toBeDefined(),
+      );
+      expect(second.setMicMuted).toHaveBeenCalledWith(true);
+    });
+
+    it("typing works while muted", async () => {
+      const session = voiceSession();
+      connectBrowserSession.mockResolvedValueOnce(session);
+      widgetIn(BrowserSessionModeType.Voice);
+      findButtonByText(mount, "Connect")!.click();
+      await vi.waitFor(() =>
+        expect(findButtonByText(mount, "Disconnect")).toBeDefined(),
+      );
+      findButtonByText(mount, "Mute")!.click();
+      const input = createdElements.find((el) => el.tagName === "INPUT") as
+        (MockElement & { value?: string }) | undefined;
+      input!.value = "hello";
+      input!.onkeydown?.({ key: "Enter" });
+      expect(session.sendChat).toHaveBeenCalledWith("hello");
+    });
+
+    it("is hidden in chat mode and with audio.silent", () => {
+      widgetIn(BrowserSessionModeType.Chat);
+      expect(muteEl().style.display).toBe("none");
+      createdElements.length = 0;
+      widgetIn(BrowserSessionModeType.Voice, { audio: { silent: true } });
+      expect(muteEl().style.display).toBe("none");
+      createdElements.length = 0;
+      widgetIn(BrowserSessionModeType.Voice);
+      expect(muteEl().style.display).toBe("");
+    });
   });
 });

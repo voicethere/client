@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-11-03
+
+### Added
+
+- Embed widget Mute button (voice and hybrid modes): the caller can turn the microphone off and keep typing to the agent. The choice holds across reconnects and new sessions of the same widget.
+- Session API `setMicMuted(muted)` and `isMicMuted()`. A muted microphone stays attached and sends silence; a microphone picked or granted later starts muted.
+
 ### Fixed
 
 - `createDebugConsole` (and the embed widget's debug console) kept every event, so a long session grew without bound. It now keeps the newest 500 events; `onDebugEvent` and the sink passed to `createDebugConsole` still receive every event.

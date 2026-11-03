@@ -297,6 +297,112 @@ describe("connectBrowserVoiceSession microphone APIs", () => {
     expect(session.getAudioInputDeviceId()).toBe("granted-mic");
   });
 
+  function mutableTrack(deviceId: string): MediaStreamTrack {
+    return {
+      kind: "audio",
+      readyState: "live",
+      enabled: true,
+      stop: vi.fn(),
+      getSettings: () => ({ deviceId }),
+    } as unknown as MediaStreamTrack;
+  }
+
+  function streamOf(track: MediaStreamTrack): MediaStream {
+    return {
+      getAudioTracks: () => [track],
+      getTracks: () => [track],
+    } as unknown as MediaStream;
+  }
+
+  function runtimeWithStreams(
+    next: (call: number) => MediaStream | Error,
+  ): WebRtcRuntime {
+    let calls = 0;
+    return {
+      WebSocket: MockWebSocket as unknown as WebRtcRuntime["WebSocket"],
+      RTCPeerConnection:
+        MockPeerConnection as unknown as WebRtcRuntime["RTCPeerConnection"],
+      getUserMedia: async () => {
+        calls += 1;
+        const out = next(calls);
+        if (out instanceof Error) throw out;
+        return out;
+      },
+    };
+  }
+
+  async function sendOffer(): Promise<void> {
+    MockWebSocket.instances[0]!.onmessage?.({
+      data: JSON.stringify({
+        type: "offer",
+        peerId: VOICE_AGENT_SERVER_PEER_ID,
+        sdp: { type: "offer", sdp: "v=0\na=ice-ufrag:abc\n" },
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  it("setMicMuted(true) disables every outbound mic track and isMicMuted reports it", async () => {
+    MockWebSocket.instances = [];
+    MockPeerConnection.instances = [];
+    const track = mutableTrack("mic-a");
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: true,
+      readiness: "data",
+      runtime: runtimeWithStreams(() => streamOf(track)),
+    });
+    expect(session.isMicMuted()).toBe(false);
+    session.setMicMuted(true);
+    expect(session.isMicMuted()).toBe(true);
+    for (const t of session.getMicStream()!.getAudioTracks()) {
+      expect(t.enabled).toBe(false);
+    }
+    session.setMicMuted(false);
+    expect(session.isMicMuted()).toBe(false);
+    expect(track.enabled).toBe(true);
+  });
+
+  it("a device switch while muted keeps the new track muted", async () => {
+    MockWebSocket.instances = [];
+    MockPeerConnection.instances = [];
+    const first = mutableTrack("mic-a");
+    const second = mutableTrack("mic-b");
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: true,
+      readiness: "data",
+      runtime: runtimeWithStreams((n) => streamOf(n === 1 ? first : second)),
+    });
+    await sendOffer();
+    session.setMicMuted(true);
+    await session.setAudioInputDevice("mic-b");
+    expect(session.getAudioInputDeviceId()).toBe("mic-b");
+    expect(second.enabled).toBe(false);
+    expect(session.isMicMuted()).toBe(true);
+  });
+
+  it("requestAudioInputAccess while muted keeps the new track muted", async () => {
+    MockWebSocket.instances = [];
+    MockPeerConnection.instances = [];
+    const granted = mutableTrack("granted-mic");
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: true,
+      readiness: "data",
+      runtime: runtimeWithStreams((n) =>
+        n === 1
+          ? new DOMException("denied", "NotAllowedError")
+          : streamOf(granted),
+      ),
+    });
+    expect(session.getAudioInputState()).toBe("denied");
+    await sendOffer();
+    session.setMicMuted(true);
+    expect(await session.requestAudioInputAccess()).toBe(true);
+    expect(granted.enabled).toBe(false);
+  });
+
   it("plays inbound audio on ontrack when audioElement play resolves", async () => {
     MockWebSocket.instances = [];
     MockPeerConnection.instances = [];
