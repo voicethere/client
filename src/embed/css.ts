@@ -19,6 +19,7 @@ export const WIDGET_CSS_CLASSES = {
   composer: "vt-widget-composer",
   input: "vt-widget-input",
   connect: "vt-widget-connect",
+  mute: "vt-widget-mute",
   micWarning: "vt-widget-mic-warning",
   playbackWarning: "vt-widget-playback-warning",
 } as const;

@@ -991,7 +991,31 @@ function buildVoiceThereWidget(
   connectBtn.style.border = "none";
   connectBtn.style.cursor = "pointer";
 
-  composer.append(input, connectBtn);
+  // The caller's choice outlives sessions: it is applied to every new session.
+  let micMutedChoice = false;
+  const muteBtn = document.createElement("button");
+  muteBtn.type = "button";
+  muteBtn.className = WIDGET_CSS_CLASSES.mute;
+  muteBtn.style.marginTop = "6px";
+  muteBtn.style.width = "100%";
+  muteBtn.style.padding = "6px";
+  muteBtn.style.borderRadius = "8px";
+  muteBtn.style.border = "1px solid rgba(255,255,255,0.15)";
+  muteBtn.style.background = "transparent";
+  muteBtn.style.color = "inherit";
+  muteBtn.style.cursor = "pointer";
+  const renderMute = () => {
+    muteBtn.style.display =
+      isVoiceSessionMode(mode) && !runtime.audio?.silent ? "" : "none";
+    muteBtn.textContent = micMutedChoice ? "Unmute" : "Mute";
+    muteBtn.setAttribute("aria-pressed", micMutedChoice ? "true" : "false");
+    muteBtn.title = micMutedChoice
+      ? "Unmute your microphone."
+      : "Mute your microphone. You can keep typing.";
+  };
+  renderMute();
+
+  composer.append(input, connectBtn, muteBtn);
 
   panel.style.display = "none";
   panel.style.flexDirection = "column";
@@ -1119,13 +1143,23 @@ function buildVoiceThereWidget(
     if (
       !session ||
       !isVoiceSessionMode(session.mode) ||
-      runtime.audio?.silent
+      runtime.audio?.silent ||
+      micMutedChoice
     ) {
       micWarning.style.display = "none";
       return;
     }
     const micState = session.getAudioInputState();
     micWarning.style.display = isMicLimitedState(micState) ? "block" : "none";
+  };
+
+  muteBtn.onclick = () => {
+    micMutedChoice = !micMutedChoice;
+    if (session && isVoiceSessionMode(session.mode)) {
+      session.setMicMuted(micMutedChoice);
+    }
+    renderMute();
+    refreshMicNotice();
   };
 
   micRequestBtn.onclick = () => {
@@ -1339,6 +1373,9 @@ function buildVoiceThereWidget(
 
     sessionEndReported = false;
     const connecting = session;
+    if (isVoiceSessionMode(connecting.mode)) {
+      connecting.setMicMuted(micMutedChoice);
+    }
     try {
       await connecting.waitForConnected();
     } catch (error) {

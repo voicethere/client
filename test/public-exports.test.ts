@@ -174,6 +174,8 @@ const EXPECTED_EXPORTS: Record<string, string[]> = {
 
 /** Exported from a module but deliberately not part of any public subpath. name -> reason. */
 const INTERNAL: Record<string, string> = {
+  DEBUG_CONSOLE_MAX_EVENTS:
+    "debug-console.ts ring size; exported for tests only",
   postEndUserIdentify: "used by browser-voice-session.ts",
   assertEndUserOptions: "used by startSession and browser-voice-session.ts",
   parseLegacyAgentError: "used by browser-voice-session.ts",

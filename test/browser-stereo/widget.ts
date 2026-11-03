@@ -6,6 +6,7 @@ import {
 
 type W = Window & {
   __widget?: VoiceThereWidget;
+  __session?: { getMicStream(): MediaStream | null };
   __mountWidget?: (wsUrl: string, sessionId: string) => void;
 };
 const w = window as unknown as W;
@@ -15,6 +16,9 @@ w.__mountWidget = (wsUrl, sessionId) => {
     display: "inline",
     mode: BrowserSessionModeType.VoiceAndData,
     mount: document.getElementById("host")!,
+    onSession: (session) => {
+      w.__session = session;
+    },
     startSession: async () => ({
       ok: true,
       jobId: "job",

@@ -90,4 +90,45 @@ test("inline widget fills its mount and draws link, filler and reply bubbles wit
     }),
   );
   await expect(times.first()).toBeHidden();
+  // Leave the room so the next test can join it.
+  await page.getByRole("button", { name: "Disconnect" }).click();
+  await expect(page.locator(".vt-widget-status")).toContainText("Disconnected");
+});
+
+test("Mute disables the outbound mic track in a real browser", async ({
+  page,
+}) => {
+  await page.goto("/widget.html");
+  await page.evaluate(
+    ([u, s]) =>
+      (
+        window as unknown as { __mountWidget(u: string, s: string): void }
+      ).__mountWidget(u, s),
+    [srv.wsUrl, srv.closeBrowserSessionId] as const,
+  );
+  await page.getByRole("button", { name: "Connect" }).click();
+  await expect(page.locator(".vt-widget-status")).toContainText("Connected", {
+    timeout: 30_000,
+  });
+  const micEnabled = () =>
+    page.evaluate(() => {
+      const stream = (
+        window as unknown as {
+          __session: { getMicStream(): MediaStream | null };
+        }
+      ).__session.getMicStream();
+      return stream!.getAudioTracks().map((t) => t.enabled);
+    });
+  expect(await micEnabled()).toEqual([true]);
+  await page.getByRole("button", { name: "Mute" }).click();
+  expect(await micEnabled()).toEqual([false]);
+  await expect(page.getByRole("button", { name: "Unmute" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await page.getByRole("button", { name: "Unmute" }).click();
+  expect(await micEnabled()).toEqual([true]);
+  // Leave the room so the next test can join it.
+  await page.getByRole("button", { name: "Disconnect" }).click();
+  await expect(page.locator(".vt-widget-status")).toContainText("Disconnected");
 });
