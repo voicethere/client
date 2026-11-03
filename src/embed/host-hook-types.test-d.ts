@@ -1,6 +1,7 @@
 import { describe, expectTypeOf, it } from "vitest";
 import type {
   BrowserSession,
+  DebugEvent,
   VoiceThereWidgetOptions,
   VoiceThereWidgetSessionEnd,
   VoiceThereWidgetStatus,
@@ -21,6 +22,9 @@ describe("embed entry host hook types", () => {
     expectTypeOf<
       NonNullable<VoiceThereWidgetOptions["isLinkAllowed"]>
     >().parameters.toEqualTypeOf<[URL]>();
+    expectTypeOf<
+      NonNullable<VoiceThereWidgetOptions["onDebugEvent"]>
+    >().parameters.toEqualTypeOf<[DebugEvent]>();
     expectTypeOf<VoiceThereWidgetOptions["runtime"]>().toEqualTypeOf<
       WebRtcRuntime | undefined
     >();
