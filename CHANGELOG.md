@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-03
+
 ### Added
 
 - End-user identity. `startSession` accepts `endUserToken` (signed token) or `endUser: { id }` (unverified id); setting both throws a `TypeError` before any request.
