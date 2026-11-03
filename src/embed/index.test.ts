@@ -1313,8 +1313,9 @@ describe("createVoiceThereWidget spoken text reveal", () => {
 });
 
 describe("createVoiceThereWidget agent links", () => {
-  const connectAndGetContent = async () => {
+  const connectAndGetContent = async (extra: Record<string, unknown> = {}) => {
     const widget = createVoiceThereWidget({
+      ...extra,
       projectId: "p",
       apiBase: "https://api.example.com",
       clientKey: "key",
@@ -1351,6 +1352,54 @@ describe("createVoiceThereWidget agent links", () => {
     expect(a.target).toBe("_blank");
     expect(a.rel).toBe("noopener noreferrer");
     expect(labelOf(a)).toBe("Pricing");
+  });
+
+  const evilLink = {
+    turnId: "t1",
+    spoken: false,
+    content: { kind: "link", url: "https://evil.example/x", label: "Evil" },
+  };
+  const linkBubbleOf = () =>
+    createdElements.find((el) => el.attrs["data-voicethere-kind"] === "link")!;
+  const expectPlainText = () => {
+    expect(anchors()).toHaveLength(0);
+    const bubble = linkBubbleOf();
+    expect(bubble.attrs["data-voicethere-kind"]).toBe("link");
+    expect(bubble.attrs["data-voicethere-turn"]).toBe("t1");
+    const row = bubble.children.find((c) => c.children.length === 2)!;
+    expect(row.tagName).toBe("SPAN");
+    expect(row.children[1]!.textContent).toBe("Evil");
+    expect(bubble.style.cursor).not.toBe("pointer");
+  };
+
+  it("isLinkAllowed false renders the link as text", async () => {
+    const isLinkAllowed = vi.fn(() => false);
+    const { onAgentContent } = await connectAndGetContent({ isLinkAllowed });
+    onAgentContent(evilLink);
+    expect(isLinkAllowed).toHaveBeenCalledTimes(1);
+    expect((isLinkAllowed.mock.calls[0] as unknown[])[0]).toBeInstanceOf(URL);
+    expectPlainText();
+  });
+
+  it("a throwing isLinkAllowed blocks the link", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { onAgentContent } = await connectAndGetContent({
+      isLinkAllowed: () => {
+        throw new Error("boom");
+      },
+    });
+    onAgentContent(evilLink);
+    expectPlainText();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("isLinkAllowed true keeps the clickable link", async () => {
+    const { onAgentContent } = await connectAndGetContent({
+      isLinkAllowed: () => true,
+    });
+    onAgentContent(evilLink);
+    expect(anchors()).toHaveLength(1);
   });
 
   it("shows the URL when there is no label and never renders another scheme", async () => {

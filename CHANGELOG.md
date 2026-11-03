@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-11-03
+
+### Added
+
+- Embed widget option `isLinkAllowed(url: URL) => boolean` (programmatic only, never in CDN config). Agent links are https-only; this lets a host narrow them further. A link it rejects, or a call that throws (logged with `console.warn`), renders as plain text with the link icon, with no anchor and no click handler. Without the option, every https link stays clickable.
+
 ## [0.21.0] - 2026-11-03
 
 ### Added
