@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `createDebugConsole` (and the embed widget's debug console) kept every event, so a long session grew without bound. It now keeps the newest 500 events; `onDebugEvent` and the sink passed to `createDebugConsole` still receive every event.
+
 ## [0.23.0] - 2026-11-03
 
 ### Added

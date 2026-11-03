@@ -2162,6 +2162,44 @@ describe("createVoiceThereWidget host hooks", () => {
     expect(statusText()).toBe("Disconnected");
   });
 
+  it("Cancel while waitForConnected is pending, then it rejects: one disconnect, Disconnected, one onSessionEnd", async () => {
+    const onSession = vi.fn();
+    const onSessionEnd = vi.fn();
+    let rejectConnected!: (error: Error) => void;
+    const disconnect = vi.fn();
+    const session = {
+      mode: BrowserSessionModeType.Chat,
+      disconnect,
+      waitForConnected: vi.fn(
+        () =>
+          new Promise<void>((_, reject) => {
+            rejectConnected = reject;
+          }),
+      ),
+      getConnectionStatus: () => ({}),
+      getAudioInputState: () => "live" as const,
+      sendChat: vi.fn(),
+    };
+    connectBrowserSession.mockResolvedValueOnce(session);
+    widgetFor({ onSession, onSessionEnd });
+    findButtonByText(mount, "Connect")!.click();
+    await vi.waitFor(() => expect(session.waitForConnected).toHaveBeenCalled());
+    findButtonByText(mount, "Cancel")!.click();
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+    expect(onSessionEnd).toHaveBeenCalledWith({ reason: "closed" });
+    rejectConnected(new Error("ice failed"));
+    await vi.waitFor(() =>
+      expect(findButtonByText(mount, "Connect")).toBeDefined(),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+    expect(onSessionEnd).toHaveBeenCalledWith({ reason: "closed" });
+    expect(statusText()).toBe("Disconnected");
+    expect(onSession).not.toHaveBeenCalledWith(session);
+  });
+
   it("onDebugEvent receives every debug event of the widget's console, and a throwing hook breaks nothing", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const onDebugEvent = vi.fn(() => {
