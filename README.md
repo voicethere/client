@@ -240,7 +240,7 @@ await connectBrowserSession({
 - Only `https:` links are reported. Other schemes, malformed URLs and content kinds this client does not know are skipped, and `onControlMessage` still receives the raw message.
 - `spoken` is `true` when the link belongs to a voice reply. A voice turn that held only a link may have no spoken text at all.
 - `parseAgentContentEvent(payload)` applies the same checks to a raw control message.
-- The embed widget renders each link as its own line in the transcript and opens it in a new tab.
+- The embed widget renders each link as its own button bubble (link icon plus label) at the moment it arrives, and opens it in a new tab. It never moves when later replies arrive.
 
 ## Filler phrases from the agent
 
@@ -288,6 +288,10 @@ CDN JSON (`VoiceThereWidgetConfigV1`) and inline options support `preset`, `posi
 
 Opening the panel hides the launcher; use `widget.close()` or the header close control to show it again.
 
+Set `display: "inline"` to embed the chat in your page instead: no launcher, the panel fills `mount` and is always open. A host that runs its own session endpoint can pass `startSession: (signal) => Promise<StartSessionResult>` instead of `clientKey` (programmatic only, never in CDN config).
+
+Message times show under each bubble by default. Hide them or change them with `theme.chat.timestamps`: `{ show?: boolean; format?: "auto" | "12h" | "24h"; color?: string }` (`"auto"` follows the browser locale). Every bubble has `data-voicethere-role`, `data-voicethere-kind` (`reply`, `filler`, `link`, `speech`, `chat`, `greeting`) and, when the message has one, `data-voicethere-turn`, for tests and custom CSS.
+
 | Class                                                          | Role                                                   |
 | -------------------------------------------------------------- | ------------------------------------------------------ |
 | `vt-widget`                                                    | Root fixed container; CSS variables below are set here |
@@ -296,6 +300,8 @@ Opening the panel hides the launcher; use `widget.close()` or the header close c
 | `vt-widget-header` / `vt-widget-close`                         | Panel title row and close button                       |
 | `vt-widget-transcript`                                         | Scrollable message list                                |
 | `vt-widget-msg--incoming` / `--outgoing` / `--system`          | Message bubbles                                        |
+| `vt-widget-msg--filler` / `--link`                             | Filler and link bubbles                                |
+| `vt-widget-msg-text` / `vt-widget-msg-time`                    | Bubble text and its time                               |
 | `vt-widget-composer` / `vt-widget-input` / `vt-widget-connect` | Message input and Connect                              |
 
 CSS variables on `.vt-widget` include `--vt-color-primary`, `--vt-color-bg`, `--vt-color-text`, `--vt-font-ui`, `--vt-font-incoming`, `--vt-font-outgoing`, `--vt-bubble-incoming-bg`, `--vt-bubble-outgoing-bg`, `--vt-panel-width`, `--vt-panel-height`, and `--vt-panel-radius`. Export constants: `WIDGET_CSS_CLASSES`, `WIDGET_CSS_VARIABLES`.

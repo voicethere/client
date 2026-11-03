@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-03
+
+### Added
+
+- Embed widget `display: "inline"` (option and CDN config). The widget has no launcher, fills its `mount` and is always open; `open()` and `close()` do nothing. The default stays `"launcher"`.
+- Embed widget `startSession` option: `(signal: AbortSignal) => Promise<StartSessionResult>`. Hosts that run their own session endpoint use it instead of `clientKey`, which is now optional (one of the two is required). Programmatic only; CDN config cannot set it. A rejected promise or `ok: false` shows its message in the status line.
+- Filler phrases from the agent (`onAgentFiller`) show as their own muted bubbles, in the order they arrive.
+- Link bubbles are styled as a button: link icon plus label (the label the agent sent, else host and path), and the whole bubble opens the link in a new tab. A link stays where it first rendered.
+- Every bubble carries `data-voicethere-role` (`incoming`, `outgoing`, `system`), `data-voicethere-kind` (`reply`, `filler`, `link`, `speech`, `chat`, `greeting`) and, when the message has one, `data-voicethere-turn`.
+- `formatWidgetTime` is exported from `@voicethere/client/embed`.
+
+### Changed
+
+- **Message times are on by default.** Each non-system bubble now shows the local time of the message in a `<time datetime="…">` element under its text. To hide them, set `theme.chat.timestamps.show` to `false` (inline option or CDN config). `theme.chat.timestamps.format` is `"auto"` (browser locale, default), `"12h"` or `"24h"`, and `theme.chat.timestamps.color` sets a hex colour. The time is set when the bubble is created and a spoken reveal does not change it.
+- Your own spoken words now show on your side of the chat, like typed messages.
+- A bubble's text now sits in a `.vt-widget-msg-text` span inside the bubble. New classes: `vt-widget-msg-time`, `vt-widget-msg--filler`, `vt-widget-msg--link`.
+
 ## [0.19.0] - 2026-11-02
 
 ### Added

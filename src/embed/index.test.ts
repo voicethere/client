@@ -29,6 +29,7 @@ import {
   DEFAULT_WIDGET_CDN_BASE,
 } from "./index.js";
 import { WIDGET_PRESET_IDS } from "./config.js";
+import { formatWidgetTime } from "./index.js";
 
 type MockElement = {
   tagName: string;
@@ -50,11 +51,10 @@ type MockElement = {
   setAttribute: (name: string, value?: string) => void;
   getAttribute: (name: string) => string | null;
   querySelector: (selector: string) => MockElement | null;
-  addEventListener: (
-    type: string,
-    handler: (event: { key: string }) => void,
-  ) => void;
+  addEventListener: (type: string, handler: (event: never) => void) => void;
   click: () => void;
+  contains: (node: unknown) => boolean;
+  clickListeners: Array<(event: { target?: unknown }) => void>;
   placeholder?: string;
   title?: string;
   type?: string;
@@ -149,10 +149,18 @@ function createMockElement(tag: string): MockElement {
       }
       return null;
     },
-    addEventListener(type: string, handler: (event: { key: string }) => void) {
+    addEventListener(type: string, handler: (event: never) => void) {
       if (type === "keydown") {
-        this.onkeydown = handler;
+        this.onkeydown = handler as (event: { key: string }) => void;
       }
+      if (type === "click") {
+        this.clickListeners.push(handler as never);
+      }
+    },
+    clickListeners: [],
+    contains(node: unknown): boolean {
+      if (node === this) return true;
+      return this.children.some((c: MockElement) => c.contains(node));
     },
     click() {
       this.onclick?.();
@@ -1204,6 +1212,33 @@ describe("createVoiceThereWidget spoken text reveal", () => {
     expect(bubbleTexts()).toEqual(["One two"]);
   });
 
+  it("a spoken reveal updates the text and keeps the bubble's time", async () => {
+    const { onControlMessage } = await connectAndGetHandler({});
+    onControlMessage({
+      type: "assistant_delta",
+      turnId: "t1",
+      text: "One two three four five.",
+      spoken: true,
+    });
+    onControlMessage({ type: "speech_event", event: "agent_speaking_start" });
+    const turnBubbles = () =>
+      createdElements.filter((el) => el.attrs["data-voicethere-turn"] === "t1");
+    expect(turnBubbles()).toHaveLength(1);
+    const timeOf = (b: MockElement) =>
+      b.children.filter((c) => c.tagName === "TIME");
+    const firstDatetime = timeOf(turnBubbles()[0]!)[0]!.attrs.datetime;
+    expect(firstDatetime).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(turnBubbles()).toHaveLength(1);
+    const times = timeOf(turnBubbles()[0]!);
+    expect(times).toHaveLength(1);
+    expect(times[0]!.attrs.datetime).toBe(firstDatetime);
+    const textEl = turnBubbles()[0]!.children.find((c) =>
+      c.classList.contains(WIDGET_CSS_CLASSES.msgText),
+    )!;
+    expect(textEl.textContent).toBe("One two three four five.");
+  });
+
   it("streamSpokenText: false paces nothing: a spoken turn is shown in full at once", async () => {
     const { onControlMessage } = await connectAndGetHandler({
       streamSpokenText: false,
@@ -1296,6 +1331,7 @@ describe("createVoiceThereWidget agent links", () => {
     return { widget, onAgentContent };
   };
   const anchors = () => createdElements.filter((el) => el.tagName === "A");
+  const labelOf = (a: MockElement) => a.children[1]!.textContent;
 
   it("renders an https link as a new-tab anchor with its label", async () => {
     const { onAgentContent } = await connectAndGetContent();
@@ -1314,7 +1350,7 @@ describe("createVoiceThereWidget agent links", () => {
     expect(a.href).toBe("https://app.voicethere.dev/docs/pricing");
     expect(a.target).toBe("_blank");
     expect(a.rel).toBe("noopener noreferrer");
-    expect(a.textContent).toBe("Pricing");
+    expect(labelOf(a)).toBe("Pricing");
   });
 
   it("shows the URL when there is no label and never renders another scheme", async () => {
@@ -1335,8 +1371,311 @@ describe("createVoiceThereWidget agent links", () => {
       spoken: false,
       content: { kind: "link", url: "https://example.com/x" },
     });
-    expect(anchors().map((a) => a.textContent)).toEqual([
-      "https://example.com/x",
+    expect(anchors().map((a) => labelOf(a))).toEqual(["example.com/x"]);
+  });
+});
+
+describe("createVoiceThereWidget bubbles, times, inline display and session provider", () => {
+  const STARTED_OK = {
+    ok: true as const,
+    jobId: "j",
+    buildId: null,
+    credentials: {
+      session_id: "s",
+      mode: "chat",
+      room_id: "r",
+      join_token: "j",
+      signaling_url: "ws://127.0.0.1:8080/ws",
+      ice_servers: [],
+      expires_at: "2099-01-01T00:00:00.000Z",
+    },
+  };
+
+  const transcriptEl = () =>
+    createdElements.find((el) =>
+      el.classList.contains(WIDGET_CSS_CLASSES.transcript),
+    )!;
+  const bubbles = () =>
+    transcriptEl().children.filter((c) =>
+      c.classList.contains(WIDGET_CSS_CLASSES.msg),
+    );
+  const attr = (el: MockElement, name: string) => el.attrs[name];
+  const timeOf = (bubble: MockElement) =>
+    bubble.children.find((c) => c.tagName === "TIME");
+
+  const connect = async (
+    extra: Record<string, unknown> = {},
+    callIndex = 0,
+  ) => {
+    const widget = createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      mode: BrowserSessionModeType.Chat,
+      mount: mount as unknown as HTMLElement,
+      ...extra,
+    });
+    findButtonByText(mount, "Connect")!.click();
+    await vi.waitFor(() =>
+      expect(connectBrowserSession).toHaveBeenCalledTimes(callIndex + 1),
+    );
+    const opts = connectBrowserSession.mock.calls[callIndex]![0] as {
+      onControlMessage: (p: Record<string, unknown>) => void;
+      onAgentContent: (e: Record<string, unknown>) => void;
+      onAgentFiller: (e: { turnId: string; text: string }) => void;
+    };
+    return { widget, ...opts };
+  };
+
+  it("inline display has no launcher, fills the mount, and open/close do nothing", async () => {
+    const widget = createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      display: "inline",
+      mount: mount as unknown as HTMLElement,
+    });
+    const root = findWidgetRoot(mount)!;
+    expect(findLauncher(root)).toBeUndefined();
+    expect(attr(root, "data-voicethere-display")).toBe("inline");
+    expect(root.style.position).toBe("relative");
+    expect(root.style.width).toBe("100%");
+    expect(root.style.height).toBe("100%");
+    const panel = findPanel(root)!;
+    expect(panel.style.display).toBe("flex");
+    expect(panel.style.width).toBe("100%");
+    expect(panel.style.height).toBe("100%");
+    widget.close();
+    expect(panel.style.display).toBe("flex");
+    widget.open();
+    expect(panel.style.display).toBe("flex");
+    widget.destroy();
+  });
+
+  it("launcher display (default) keeps the launcher and a closed panel", () => {
+    createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      mount: mount as unknown as HTMLElement,
+    });
+    const root = findWidgetRoot(mount)!;
+    expect(findLauncher(root)).toBeDefined();
+    expect(findPanel(root)!.style.display).toBe("none");
+    expect(root.style.position).toBe("fixed");
+  });
+
+  it("uses the startSession provider and never sends the clientKey request", async () => {
+    const provider = vi.fn(async (_signal: AbortSignal) => STARTED_OK);
+    await connect({ clientKey: undefined, startSession: provider });
+    expect(provider).toHaveBeenCalledTimes(1);
+    expect(provider.mock.calls[0]![0]).toBeInstanceOf(AbortSignal);
+    expect(startSession).not.toHaveBeenCalled();
+    expect(
+      (connectBrowserSession.mock.calls[0]![0] as { credentials: unknown })
+        .credentials,
+    ).toBe(STARTED_OK.credentials);
+  });
+
+  it("a provider that rejects or returns ok:false shows the message and does not connect", async () => {
+    const rejecting = vi.fn(async () => {
+      throw new Error("demo busy");
+    });
+    createVoiceThereWidget({
+      startSession: rejecting,
+      mount: mount as unknown as HTMLElement,
+    });
+    findButtonByText(mount, "Connect")!.click();
+    await vi.waitFor(() => expect(rejecting).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(createdElements.some((el) => el.textContent === "demo busy")).toBe(
+        true,
+      ),
+    );
+    expect(connectBrowserSession).not.toHaveBeenCalled();
+  });
+
+  it("requires clientKey or a startSession provider", () => {
+    expect(() =>
+      createVoiceThereWidget({ mount: mount as unknown as HTMLElement }),
+    ).toThrow(/clientKey or a startSession provider/);
+  });
+
+  it("shows a time on every non-system bubble by default, with a datetime", async () => {
+    const { onControlMessage } = await connect();
+    onControlMessage({ type: "chat_reply", text: "Hello", turnId: "t1" });
+    const [reply] = bubbles();
+    const time = timeOf(reply!)!;
+    expect(time).toBeDefined();
+    expect(time.style.display).toBe("block");
+    expect(Number.isNaN(Date.parse(time.attrs.datetime!))).toBe(false);
+    expect(time.textContent).toMatch(/\d/);
+  });
+
+  it("theme.chat.timestamps.show false hides the times", async () => {
+    const { onControlMessage } = await connect({
+      theme: { chat: { timestamps: { show: false } } },
+    });
+    onControlMessage({ type: "chat_reply", text: "Hello" });
+    expect(timeOf(bubbles()[0]!)!.style.display).toBe("none");
+  });
+
+  it("timestamps colour applies, and updateConfig re-renders existing times", async () => {
+    const { widget, onControlMessage } = await connect({
+      theme: { chat: { timestamps: { color: "#ff0000" } } },
+    });
+    onControlMessage({ type: "chat_reply", text: "Hello" });
+    const time = timeOf(bubbles()[0]!)!;
+    expect(time.style.color).toBe("#ff0000");
+    const datetime = time.attrs.datetime;
+    widget.updateConfig({ theme: { chat: { timestamps: { show: false } } } });
+    expect(time.style.display).toBe("none");
+    expect(time.attrs.datetime).toBe(datetime);
+  });
+
+  it("formatWidgetTime renders 12h and 24h", () => {
+    const at = new Date(2026, 10, 3, 15, 5);
+    expect(formatWidgetTime(at, "12h", "en-US")).toMatch(/^3:05\s?PM$/i);
+    expect(formatWidgetTime(at, "24h", "en-US")).toBe("15:05");
+    expect(formatWidgetTime(new Date(2026, 10, 3, 0, 5), "24h", "en-US")).toBe(
+      "00:05",
+    );
+    expect(formatWidgetTime(at, "auto", "en-US")).toMatch(/3:05\s?PM/i);
+  });
+
+  it("a link that arrives before the reply stays above the reply bubble", async () => {
+    const { onControlMessage, onAgentContent } = await connect();
+    onAgentContent({
+      turnId: "t1",
+      spoken: false,
+      content: { kind: "link", url: "https://example.com/pricing" },
+    });
+    const linkBubble = bubbles()[0]!;
+    onControlMessage({ type: "chat_reply", text: "Here you go", turnId: "t1" });
+    const after = bubbles();
+    expect(after[0]).toBe(linkBubble);
+    expect(attr(after[0]!, "data-voicethere-kind")).toBe("link");
+    expect(attr(after[1]!, "data-voicethere-kind")).toBe("reply");
+  });
+
+  it("a filler bubble comes before the reply bubble and carries the filler kind", async () => {
+    const { onControlMessage, onAgentFiller } = await connect();
+    onAgentFiller({ turnId: "t1", text: "One moment" });
+    onControlMessage({ type: "chat_reply", text: "Done", turnId: "t1" });
+    const [filler, reply] = bubbles();
+    expect(attr(filler!, "data-voicethere-kind")).toBe("filler");
+    expect(attr(filler!, "data-voicethere-turn")).toBe("t1");
+    expect(filler!.classList.contains(WIDGET_CSS_CLASSES.msgFiller)).toBe(true);
+    expect(attr(reply!, "data-voicethere-kind")).toBe("reply");
+  });
+
+  it("sets role, kind and turn attributes on every bubble kind", async () => {
+    const { onControlMessage, onAgentContent, onAgentFiller } = await connect({
+      greeting: "Hi there",
+    });
+    onAgentFiller({ turnId: "t1", text: "One moment" });
+    onAgentContent({
+      turnId: "t1",
+      spoken: false,
+      content: { kind: "link", url: "https://example.com/x" },
+    });
+    onControlMessage({ type: "chat_reply", text: "Reply", turnId: "t1" });
+    onControlMessage({
+      type: "speech_event",
+      event: "stt_final",
+      text: "caller words",
+    });
+    const input = createdElements.find((el) => el.tagName === "INPUT") as
+      (MockElement & { value?: string }) | undefined;
+    input!.value = "typed";
+    input!.onkeydown?.({ key: "Enter" });
+    const seen = bubbles().map((b) => [
+      attr(b, "data-voicethere-role"),
+      attr(b, "data-voicethere-kind"),
+      attr(b, "data-voicethere-turn"),
     ]);
+    expect(seen).toEqual([
+      ["system", "greeting", undefined],
+      ["incoming", "filler", "t1"],
+      ["incoming", "link", "t1"],
+      ["incoming", "reply", "t1"],
+      ["outgoing", "speech", undefined],
+      ["outgoing", "chat", undefined],
+    ]);
+    // System bubbles carry no time; all others do.
+    expect(bubbles().map((b) => timeOf(b) !== undefined)).toEqual([
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+  });
+
+  it("a click on the link bubble outside the anchor opens the link once", async () => {
+    vi.stubGlobal(
+      "Node",
+      class {
+        static [Symbol.hasInstance](v: unknown) {
+          return typeof v === "object" && v !== null;
+        }
+      },
+    );
+    const { onAgentContent } = await connect();
+    onAgentContent({
+      turnId: "t1",
+      spoken: false,
+      content: { kind: "link", url: "https://example.com/x", label: "X" },
+    });
+    const bubble = bubbles()[0]!;
+    const anchor = bubble.children.find((c) => c.tagName === "A")!;
+    const clickSpy = vi.fn();
+    anchor.click = clickSpy;
+    expect(bubble.clickListeners).toHaveLength(1);
+    bubble.clickListeners[0]!({ target: bubble });
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    bubble.clickListeners[0]!({ target: anchor.children[1] });
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a user stt_final bubble renders on the outgoing side, agent speech stays incoming", async () => {
+    const { onControlMessage } = await connect();
+    onControlMessage({
+      type: "speech_event",
+      event: "stt_final",
+      text: "caller words",
+    });
+    onControlMessage({
+      type: "speech_event",
+      event: "agent_speech",
+      text: "agent words",
+    });
+    const [user, agent] = bubbles();
+    expect(attr(user!, "data-voicethere-role")).toBe("outgoing");
+    expect(attr(user!, "data-voicethere-kind")).toBe("speech");
+    expect(user!.classList.contains(WIDGET_CSS_CLASSES.msgOutgoing)).toBe(true);
+    expect(user!.style.alignSelf).toBe("flex-end");
+    expect(timeOf(user!)).toBeDefined();
+    expect(attr(agent!, "data-voicethere-role")).toBe("incoming");
+    expect(attr(agent!, "data-voicethere-kind")).toBe("reply");
+  });
+
+  it("a link bubble is a button: icon plus label, https only, new tab", async () => {
+    const { onAgentContent } = await connect();
+    onAgentContent({
+      turnId: "t1",
+      spoken: false,
+      content: { kind: "link", url: "https://example.com/", label: " Docs " },
+    });
+    const bubble = bubbles()[0]!;
+    const anchor = bubble.children.find((c) => c.tagName === "A")!;
+    expect(anchor.children).toHaveLength(2);
+    expect(
+      (anchor.children[0] as unknown as { innerHTML: string }).innerHTML,
+    ).toContain("<svg");
+    expect(anchor.children[1]!.textContent).toBe("Docs");
+    expect(bubble.style.cursor).toBe("pointer");
+    expect(timeOf(bubble)).toBeDefined();
   });
 });

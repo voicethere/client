@@ -175,3 +175,44 @@ describe("parseVoiceThereWidgetConfigV1", () => {
     ).toThrow(/mode must be/);
   });
 });
+
+describe("widget display and chat timestamps", () => {
+  it("accepts display launcher and inline", () => {
+    expect(
+      parseVoiceThereWidgetConfigV1({ v: 1, display: "inline" }).display,
+    ).toBe("inline");
+    expect(
+      parseVoiceThereWidgetConfigV1({ v: 1, display: "launcher" }).display,
+    ).toBe("launcher");
+  });
+
+  it("rejects an unknown display", () => {
+    expect(() =>
+      parseVoiceThereWidgetConfigV1({ v: 1, display: "fullscreen" }),
+    ).toThrow(WidgetConfigError);
+    expect(() => parseVoiceThereWidgetConfigV1({ v: 1, display: 1 })).toThrow(
+      WidgetConfigError,
+    );
+  });
+
+  it("accepts theme.chat.timestamps", () => {
+    expect(
+      parseVoiceThereWidgetConfigV1({
+        v: 1,
+        theme: {
+          chat: { timestamps: { show: false, format: "24h", color: "#abc" } },
+        },
+      }).theme?.chat?.timestamps,
+    ).toEqual({ show: false, format: "24h", color: "#abc" });
+  });
+
+  it("rejects bad timestamps values and unknown keys", () => {
+    const parse = (timestamps: unknown) =>
+      parseVoiceThereWidgetConfigV1({ v: 1, theme: { chat: { timestamps } } });
+    expect(() => parse({ show: "yes" })).toThrow(WidgetConfigError);
+    expect(() => parse({ format: "iso" })).toThrow(WidgetConfigError);
+    expect(() => parse({ color: "red" })).toThrow(WidgetConfigError);
+    expect(() => parse({ other: 1 })).toThrow(WidgetConfigError);
+    expect(() => parse("on")).toThrow(WidgetConfigError);
+  });
+});
