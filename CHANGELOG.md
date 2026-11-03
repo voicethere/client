@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-11-03
+
+### Added
+
+- Embed widget option `onDebugEvent(event: DebugEvent) => void` (programmatic only, never in CDN config). It receives every debug event of the widget's session pipeline (session start, signaling, WebRTC), in addition to the widget's own handling. A hook that throws is logged with `console.warn` and never breaks the session. The `DebugEvent` type (`level`, `source`, `name`, `detail?`, `raw?`, `ts`) is exported from `@voicethere/client/embed`.
+
+### Fixed
+
+- Embed widget: `destroy()` while the session was still connecting (for example during the microphone permission prompt) left the session running. The session that resolves afterwards is now disconnected at once and never handed to `onSession`, the transcript or the status line.
+
 ## [0.21.1] - 2026-11-03
 
 ### Added

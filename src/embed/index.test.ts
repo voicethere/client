@@ -1910,6 +1910,76 @@ describe("createVoiceThereWidget host hooks", () => {
     expect(onSessionEnd).toHaveBeenCalledWith({ reason: "closed" });
   });
 
+  it("destroy while connectBrowserSession is pending disconnects the session and hands it out nowhere", async () => {
+    const onSession = vi.fn();
+    const onSessionEnd = vi.fn();
+    const onStatus = vi.fn();
+    let release!: (value: unknown) => void;
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    const disconnect = vi.fn();
+    const waitForConnected = vi.fn(async () => undefined);
+    connectBrowserSession.mockReturnValueOnce(held);
+    const widget = createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      mode: BrowserSessionModeType.Chat,
+      mount: mount as unknown as HTMLElement,
+      onSession,
+      onSessionEnd,
+      onStatus,
+    });
+    findButtonByText(mount, "Connect")!.click();
+    await vi.waitFor(() => expect(connectBrowserSession).toHaveBeenCalled());
+    widget.destroy();
+    onSession.mockClear();
+    onSessionEnd.mockClear();
+    onStatus.mockClear();
+    release({
+      mode: BrowserSessionModeType.Chat,
+      disconnect,
+      waitForConnected,
+      getConnectionStatus: () => ({}),
+      getAudioInputState: () => "live" as const,
+      sendChat: vi.fn(),
+    });
+    await vi.waitFor(() => expect(disconnect).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(waitForConnected).not.toHaveBeenCalled();
+    expect(onSession).not.toHaveBeenCalled();
+    expect(onSessionEnd).not.toHaveBeenCalled();
+    expect(onStatus).not.toHaveBeenCalled();
+  });
+
+  it("onDebugEvent receives every debug event of the widget's console, and a throwing hook breaks nothing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const onDebugEvent = vi.fn(() => {
+      throw new Error("host broke");
+    });
+    const onSession = vi.fn();
+    const { opts, session } = await connect({ onDebugEvent, onSession });
+    const sink = opts.onDebugEvent as unknown as {
+      info: (source: string, name: string, detail?: string) => unknown;
+    };
+    sink.info("signaling", "join", "room r");
+    expect(onDebugEvent).toHaveBeenCalledTimes(1);
+    expect(onDebugEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "info",
+        source: "signaling",
+        name: "join",
+        detail: "room r",
+        ts: expect.any(String),
+      }),
+    );
+    expect(warn).toHaveBeenCalled();
+    expect(onSession).toHaveBeenLastCalledWith(session);
+    warn.mockRestore();
+  });
+
   it("a failed connect reports the session end once and never hands out the session", async () => {
     const onSession = vi.fn();
     const onSessionEnd = vi.fn();

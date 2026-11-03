@@ -44,6 +44,7 @@ import {
   getWidgetPreset,
   type ResolvedWidgetTheme,
 } from "./presets.js";
+import type { DebugEvent } from "../browser/debug-console.js";
 import { createSpokenChatCaption } from "../spoken-text-reveal.js";
 
 export type {
@@ -121,7 +122,7 @@ export type VoiceThereWidgetSessionEnd = {
   error?: unknown;
 };
 
-export type { BrowserSession, WebRtcRuntime };
+export type { BrowserSession, WebRtcRuntime, DebugEvent };
 
 export type VoiceThereWidgetOptions = {
   /**
@@ -178,6 +179,12 @@ export type VoiceThereWidgetOptions = {
    */
   isLinkAllowed?: (url: URL) => boolean;
   /**
+   * Every debug event the widget's session pipeline emits (session start,
+   * signaling, WebRTC), in addition to the widget's own handling. A hook that
+   * throws is logged with `console.warn` and never breaks the session.
+   */
+  onDebugEvent?: (event: DebugEvent) => void;
+  /**
    * Microphone options for voice sessions. `deviceId` is the preferred input
    * (`deviceId: { ideal }` for getUserMedia); `silent` sends a silent track
    * and never asks for the microphone.
@@ -219,6 +226,7 @@ type ResolvedVoiceThereWidgetOptions = {
   onControlMessage?: VoiceThereWidgetOptions["onControlMessage"];
   onStatus?: VoiceThereWidgetOptions["onStatus"];
   isLinkAllowed?: VoiceThereWidgetOptions["isLinkAllowed"];
+  onDebugEvent?: VoiceThereWidgetOptions["onDebugEvent"];
   audio?: VoiceThereWidgetOptions["audio"];
   runtime?: VoiceThereWidgetOptions["runtime"];
 };
@@ -292,6 +300,7 @@ function mergeWidgetOptions(
     onControlMessage: inline.onControlMessage,
     onStatus: inline.onStatus,
     isLinkAllowed: inline.isLinkAllowed,
+    onDebugEvent: inline.onDebugEvent,
     audio: inline.audio,
     runtime: inline.runtime,
   };
@@ -1014,9 +1023,11 @@ function buildVoiceThereWidget(
   };
   let isOpen = false;
   let startAbortController: AbortController | null = null;
+  let destroyed = false;
 
-  const debug = createDebugConsole(() => {
-    /* transcript is primary UI; debug export kept for session wiring */
+  const debug = createDebugConsole((event) => {
+    // The transcript is the primary UI; events only reach the host hook.
+    callHost(runtime.onDebugEvent, event);
   });
 
   const refreshGreetingBubble = () => {
@@ -1320,6 +1331,15 @@ function buildVoiceThereWidget(
         },
       });
 
+      if (startAbort.signal.aborted || destroyed) {
+        // The widget was destroyed while connecting (for example during the
+        // microphone prompt): close the session instead of leaking it.
+        const orphan = session;
+        session = null;
+        orphan.disconnect();
+        return;
+      }
+
       sessionEndReported = false;
       const connecting = session;
       try {
@@ -1336,6 +1356,7 @@ function buildVoiceThereWidget(
         reportSessionEnd({ reason: "error", error });
         return;
       }
+      if (session !== connecting) return;
       setStatusDisplay(formatWebRtcStatus(session.getConnectionStatus()));
       refreshMicNotice();
       callHost(runtime.onSession, session);
@@ -1393,6 +1414,7 @@ function buildVoiceThereWidget(
       setOpen(false);
     },
     destroy: () => {
+      destroyed = true;
       startAbortController?.abort();
       spokenCaption.dispose();
       session?.disconnect();
