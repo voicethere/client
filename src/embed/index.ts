@@ -1146,224 +1146,245 @@ function buildVoiceThereWidget(
     })();
   };
 
-  connectBtn.onclick = () => {
-    void unlockAudioPlayback(inboundAudio);
-    void (async () => {
-      if (session) {
-        session.disconnect();
-        session = null;
-        spokenCaption.dispose();
-        hideSessionNotices();
-        setStatusDisplay("Disconnected");
-        reportSessionEnd({ reason: "closed" });
-        connectBtn.textContent = "Connect";
-        connectBtn.title = "";
+  // True from the click that starts a session until its start flow has settled.
+  let starting = false;
+
+  const startFlow = async (): Promise<void> => {
+    lastRecoveryState = undefined;
+    setStatusDisplay("Connecting…", true);
+    const startAbort = new AbortController();
+    startAbortController = startAbort;
+    let started: StartSessionResult;
+    if (runtime.startSession) {
+      try {
+        started = await runtime.startSession(startAbort.signal);
+      } catch (error) {
+        started = {
+          ok: false,
+          code: "HTTP_ERROR",
+          message:
+            error instanceof Error && error.message
+              ? error.message
+              : "Could not start the session",
+        };
+      }
+    } else {
+      started = await startSession({
+        apiBase: runtime.apiBase,
+        projectId: runtime.projectId,
+        headers: { Authorization: `Bearer ${runtime.clientKey}` },
+        onStatus: (s) => {
+          if (s.status === "waiting") {
+            const position =
+              s.queue_position != null ? ` (position ${s.queue_position})` : "";
+            setStatusDisplay(`Waiting for capacity${position}…`, true);
+          } else if (s.status === "failed") {
+            setStatusDisplay(s.failure_message ?? "Provisioning failed");
+          }
+        },
+        debug,
+      });
+    }
+    if (startAbort.signal.aborted) return;
+
+    if (!started.ok) {
+      if (
+        runtime.clientKey &&
+        (started.httpStatus === 401 || started.httpStatus === 403)
+      ) {
+        // The key was rejected; drop its cached project pointer.
+        void clearWidgetKeyPointer(runtime.clientKey).catch(() => undefined);
+      }
+      setStatusDisplay(started.message);
+      return;
+    }
+
+    const handleWidgetControl = (payload: Record<string, unknown>) => {
+      const spokenAssistant =
+        payload.spoken === true &&
+        (payload.type === "assistant_delta" ||
+          payload.type === "assistant_done");
+      if (
+        spokenAssistant ||
+        (runtime.streamSpokenText && runtime.paceChatReply)
+      ) {
+        // Spoken turns, and every agent message when chat replies are paced too.
+        spokenCaption.handleControlMessage(payload);
         return;
       }
-
-      lastRecoveryState = undefined;
-      setStatusDisplay("Connecting…", true);
-      const startAbort = new AbortController();
-      startAbortController = startAbort;
-      let started: StartSessionResult;
-      if (runtime.startSession) {
-        try {
-          started = await runtime.startSession(startAbort.signal);
-        } catch (error) {
-          started = {
-            ok: false,
-            code: "HTTP_ERROR",
-            message:
-              error instanceof Error && error.message
-                ? error.message
-                : "Could not start the session",
-          };
-        }
-      } else {
-        started = await startSession({
-          apiBase: runtime.apiBase,
-          projectId: runtime.projectId,
-          headers: { Authorization: `Bearer ${runtime.clientKey}` },
-          onStatus: (s) => {
-            if (s.status === "waiting") {
-              const position =
-                s.queue_position != null
-                  ? ` (position ${s.queue_position})`
-                  : "";
-              setStatusDisplay(`Waiting for capacity${position}…`, true);
-            } else if (s.status === "failed") {
-              setStatusDisplay(s.failure_message ?? "Provisioning failed");
-            }
-          },
-          debug,
+      if (runtime.streamSpokenText && payload.type === "speech_event") {
+        // Default: speech events only pace spoken turns; typed text below is unchanged.
+        spokenCaption.handleControlMessage(payload);
+      }
+      const incoming = incomingTextFromControlMessage(payload);
+      if (incoming) {
+        const kind = controlMessageKind(payload);
+        // The caller's own words sit on the user side, like typed chat.
+        addBubble(kind === "speech" ? "outgoing" : "incoming", kind, incoming, {
+          turnId:
+            typeof payload.turnId === "string" ? payload.turnId : undefined,
         });
       }
-      if (startAbort.signal.aborted) return;
+    };
 
-      if (!started.ok) {
-        if (
-          runtime.clientKey &&
-          (started.httpStatus === 401 || started.httpStatus === 403)
-        ) {
-          // The key was rejected; drop its cached project pointer.
-          void clearWidgetKeyPointer(runtime.clientKey).catch(() => undefined);
+    session = await connectBrowserSession({
+      mode,
+      credentials: started.credentials,
+      audioElement: inboundAudio,
+      onDebugEvent: debug,
+      runtime: runtime.runtime,
+      audioInputDeviceId: runtime.audio?.deviceId,
+      silentMic: runtime.audio?.silent === true ? true : undefined,
+      onSessionError: (event: SessionErrorEvent) => {
+        if (event.recoverable !== true) {
+          setStatusDisplay(event.message, false, true);
         }
-        setStatusDisplay(started.message);
-        return;
-      }
-
-      const handleWidgetControl = (payload: Record<string, unknown>) => {
-        const spokenAssistant =
-          payload.spoken === true &&
-          (payload.type === "assistant_delta" ||
-            payload.type === "assistant_done");
-        if (
-          spokenAssistant ||
-          (runtime.streamSpokenText && runtime.paceChatReply)
-        ) {
-          // Spoken turns, and every agent message when chat replies are paced too.
-          spokenCaption.handleControlMessage(payload);
+        // Only an explicit `recoverable: false` is terminal.
+        if (event.recoverable === false) {
+          reportSessionEnd({ reason: "error", error: event });
+        }
+      },
+      onAgentAudioTrack: (track) => {
+        callHost(runtime.onAgentAudioTrack, track);
+      },
+      onControlMessage: (payload) => {
+        handleWidgetControl(payload);
+        callHost(runtime.onControlMessage, payload);
+      },
+      onAgentContent: (event) => {
+        if (event.content.kind === "link") {
+          addLinkBubble(event.content, event.turnId);
+        }
+      },
+      onAgentFiller: (event) => {
+        addBubble("incoming", "filler", event.text, {
+          turnId: event.turnId,
+        });
+      },
+      onConnectionStatus: (connectionStatus) => {
+        const recovery = connectionStatus.recovery;
+        const previousState = lastRecoveryState;
+        lastRecoveryState = recovery?.state;
+        if (recovery?.state === "interrupted") {
+          setStatusDisplay(recovery.message, true);
           return;
         }
-        if (runtime.streamSpokenText && payload.type === "speech_event") {
-          // Default: speech events only pace spoken turns; typed text below is unchanged.
-          spokenCaption.handleControlMessage(payload);
+        if (recovery?.state === "lost") {
+          if (previousState === "lost") return;
+          setStatusDisplay(recovery.message, false, true);
+          const lostSession = session;
+          session = null;
+          lostSession?.disconnect();
+          spokenCaption.dispose();
+          hideSessionNotices();
+          connectBtn.textContent = "Connect";
+          connectBtn.title = "";
+          reportSessionEnd({ reason: "error", error: recovery });
+          return;
         }
-        const incoming = incomingTextFromControlMessage(payload);
-        if (incoming) {
-          const kind = controlMessageKind(payload);
-          // The caller's own words sit on the user side, like typed chat.
-          addBubble(
-            kind === "speech" ? "outgoing" : "incoming",
-            kind,
-            incoming,
-            {
-              turnId:
-                typeof payload.turnId === "string" ? payload.turnId : undefined,
-            },
-          );
-        }
-      };
-
-      session = await connectBrowserSession({
-        mode,
-        credentials: started.credentials,
-        audioElement: inboundAudio,
-        onDebugEvent: debug,
-        runtime: runtime.runtime,
-        audioInputDeviceId: runtime.audio?.deviceId,
-        silentMic: runtime.audio?.silent === true ? true : undefined,
-        onSessionError: (event: SessionErrorEvent) => {
-          if (event.recoverable !== true) {
-            setStatusDisplay(event.message, false, true);
+        if (recovery?.state === "restored") {
+          if (previousState !== "restored") {
+            restoredNoticeUntilMs = Date.now() + 3000;
+            setTimeout(() => {
+              if (session && lastRecoveryState === "restored") {
+                setStatusDisplay(
+                  formatWebRtcStatus(session.getConnectionStatus()),
+                );
+              }
+            }, 3000);
           }
-          // Only an explicit `recoverable: false` is terminal.
-          if (event.recoverable === false) {
-            reportSessionEnd({ reason: "error", error: event });
-          }
-        },
-        onAgentAudioTrack: (track) => {
-          callHost(runtime.onAgentAudioTrack, track);
-        },
-        onControlMessage: (payload) => {
-          handleWidgetControl(payload);
-          callHost(runtime.onControlMessage, payload);
-        },
-        onAgentContent: (event) => {
-          if (event.content.kind === "link") {
-            addLinkBubble(event.content, event.turnId);
-          }
-        },
-        onAgentFiller: (event) => {
-          addBubble("incoming", "filler", event.text, {
-            turnId: event.turnId,
-          });
-        },
-        onConnectionStatus: (connectionStatus) => {
-          const recovery = connectionStatus.recovery;
-          const previousState = lastRecoveryState;
-          lastRecoveryState = recovery?.state;
-          if (recovery?.state === "interrupted") {
-            setStatusDisplay(recovery.message, true);
+          if (Date.now() < restoredNoticeUntilMs) {
+            setStatusDisplay(recovery.message);
             return;
           }
-          if (recovery?.state === "lost") {
-            if (previousState === "lost") return;
-            setStatusDisplay(recovery.message, false, true);
-            const lostSession = session;
-            session = null;
-            lostSession?.disconnect();
-            spokenCaption.dispose();
-            hideSessionNotices();
-            connectBtn.textContent = "Connect";
-            connectBtn.title = "";
-            reportSessionEnd({ reason: "error", error: recovery });
-            return;
-          }
-          if (recovery?.state === "restored") {
-            if (previousState !== "restored") {
-              restoredNoticeUntilMs = Date.now() + 3000;
-              setTimeout(() => {
-                if (session && lastRecoveryState === "restored") {
-                  setStatusDisplay(
-                    formatWebRtcStatus(session.getConnectionStatus()),
-                  );
-                }
-              }, 3000);
-            }
-            if (Date.now() < restoredNoticeUntilMs) {
-              setStatusDisplay(recovery.message);
-              return;
-            }
-          }
-          setStatusDisplay(formatWebRtcStatus(connectionStatus));
-        },
-        onReconnected: () => {
-          if (session) callHost(runtime.onSession, session);
-        },
-        onReconnecting: (attempt) => {
-          if (lastRecoveryState === "interrupted") return;
-          setStatusDisplay(`Reconnecting (${attempt})…`, true);
-        },
-        onAudioPlayback: (playbackState) => {
-          playbackWarning.style.display =
-            playbackState === "blocked" ? "block" : "none";
-        },
-      });
+        }
+        setStatusDisplay(formatWebRtcStatus(connectionStatus));
+      },
+      onReconnected: () => {
+        if (session) callHost(runtime.onSession, session);
+      },
+      onReconnecting: (attempt) => {
+        if (lastRecoveryState === "interrupted") return;
+        setStatusDisplay(`Reconnecting (${attempt})…`, true);
+      },
+      onAudioPlayback: (playbackState) => {
+        playbackWarning.style.display =
+          playbackState === "blocked" ? "block" : "none";
+      },
+    });
 
-      if (startAbort.signal.aborted || destroyed) {
-        // The widget was destroyed while connecting (for example during the
-        // microphone prompt): close the session instead of leaking it.
-        const orphan = session;
-        session = null;
-        orphan.disconnect();
-        return;
+    if (startAbort.signal.aborted || destroyed) {
+      // The widget was destroyed while connecting (for example during the
+      // microphone prompt): close the session instead of leaking it.
+      const orphan = session;
+      session = null;
+      orphan.disconnect();
+      return;
+    }
+
+    sessionEndReported = false;
+    const connecting = session;
+    try {
+      await connecting.waitForConnected();
+    } catch (error) {
+      if (session !== connecting) return;
+      connecting.disconnect();
+      session = null;
+      spokenCaption.dispose();
+      hideSessionNotices();
+      setStatusDisplay("Could not connect", false, true);
+      connectBtn.textContent = "Connect";
+      connectBtn.title = "";
+      reportSessionEnd({ reason: "error", error });
+      return;
+    }
+    if (session !== connecting) return;
+    setStatusDisplay(formatWebRtcStatus(session.getConnectionStatus()));
+    refreshMicNotice();
+    callHost(runtime.onSession, session);
+    connectBtn.textContent = "Disconnect";
+    connectBtn.title =
+      "Disconnect this session. Connect again to start a new orchestrator session.";
+  };
+
+  connectBtn.onclick = () => {
+    void unlockAudioPlayback(inboundAudio);
+    if (session) {
+      session.disconnect();
+      session = null;
+      // A start that is still waiting for the session to become ready ends here.
+      if (starting) startAbortController?.abort();
+      spokenCaption.dispose();
+      hideSessionNotices();
+      setStatusDisplay("Disconnected");
+      reportSessionEnd({ reason: "closed" });
+      connectBtn.textContent = "Connect";
+      connectBtn.title = "";
+      return;
+    }
+    if (starting) {
+      // Connect while connecting cancels the pending start. The flow settles
+      // (and disconnects a session that resolves late) before Connect works again.
+      if (startAbortController && !startAbortController.signal.aborted) {
+        startAbortController.abort();
+        setStatusDisplay("Cancelling…", true);
       }
-
-      sessionEndReported = false;
-      const connecting = session;
-      try {
-        await connecting.waitForConnected();
-      } catch (error) {
-        if (session !== connecting) return;
-        connecting.disconnect();
-        session = null;
-        spokenCaption.dispose();
-        hideSessionNotices();
-        setStatusDisplay("Could not connect", false, true);
+      return;
+    }
+    starting = true;
+    connectBtn.textContent = "Cancel";
+    connectBtn.title = "Cancel connecting.";
+    void startFlow().finally(() => {
+      starting = false;
+      if (destroyed) return;
+      if (!session) {
+        if (startAbortController?.signal.aborted) {
+          setStatusDisplay("Disconnected");
+        }
         connectBtn.textContent = "Connect";
         connectBtn.title = "";
-        reportSessionEnd({ reason: "error", error });
-        return;
       }
-      if (session !== connecting) return;
-      setStatusDisplay(formatWebRtcStatus(session.getConnectionStatus()));
-      refreshMicNotice();
-      callHost(runtime.onSession, session);
-      connectBtn.textContent = "Disconnect";
-      connectBtn.title =
-        "Disconnect this session. Connect again to start a new orchestrator session.";
-    })();
+    });
   };
 
   input.addEventListener("keydown", (event) => {

@@ -1954,6 +1954,84 @@ describe("createVoiceThereWidget host hooks", () => {
     expect(onStatus).not.toHaveBeenCalled();
   });
 
+  const pendingConnect = () => {
+    let release!: (value: unknown) => void;
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    const disconnect = vi.fn();
+    const session = {
+      mode: BrowserSessionModeType.Chat,
+      disconnect,
+      waitForConnected: vi.fn(async () => undefined),
+      getConnectionStatus: () => ({}),
+      getAudioInputState: () => "live" as const,
+      sendChat: vi.fn(),
+    };
+    connectBrowserSession.mockReturnValueOnce(held);
+    return { release: () => release(session), disconnect, session };
+  };
+
+  it("Connect while connecting cancels the pending start: one start, the late session is disconnected and never handed out", async () => {
+    const onSession = vi.fn();
+    const onSessionEnd = vi.fn();
+    const { release, disconnect } = pendingConnect();
+    createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      mode: BrowserSessionModeType.Chat,
+      mount: mount as unknown as HTMLElement,
+      onSession,
+      onSessionEnd,
+    });
+    findButtonByText(mount, "Connect")!.click();
+    await vi.waitFor(() => expect(connectBrowserSession).toHaveBeenCalled());
+    expect(findButtonByText(mount, "Connect")).toBeUndefined();
+    const cancel = findButtonByText(mount, "Cancel")!;
+    cancel.click();
+    cancel.click();
+    expect(disconnect).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(() => expect(disconnect).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(findButtonByText(mount, "Connect")).toBeDefined(),
+    );
+    expect(startSession).toHaveBeenCalledTimes(1);
+    expect(connectBrowserSession).toHaveBeenCalledTimes(1);
+    expect(onSession).not.toHaveBeenCalled();
+    expect(onSessionEnd).not.toHaveBeenCalled();
+  });
+
+  it("after a cancelled start has settled, Connect starts a new session normally", async () => {
+    const onSession = vi.fn();
+    const { release, disconnect } = pendingConnect();
+    createVoiceThereWidget({
+      projectId: "p",
+      apiBase: "https://api.example.com",
+      clientKey: "key",
+      mode: BrowserSessionModeType.Chat,
+      mount: mount as unknown as HTMLElement,
+      onSession,
+    });
+    findButtonByText(mount, "Connect")!.click();
+    await vi.waitFor(() => expect(connectBrowserSession).toHaveBeenCalled());
+    findButtonByText(mount, "Cancel")!.click();
+    release();
+    await vi.waitFor(() => expect(disconnect).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(findButtonByText(mount, "Connect")).toBeDefined(),
+    );
+    findButtonByText(mount, "Connect")!.click();
+    await vi.waitFor(() =>
+      expect(connectBrowserSession).toHaveBeenCalledTimes(2),
+    );
+    await vi.waitFor(() => expect(onSession).toHaveBeenCalledTimes(1));
+    expect(startSession).toHaveBeenCalledTimes(2);
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(findButtonByText(mount, "Disconnect")).toBeDefined();
+  });
+
   it("onDebugEvent receives every debug event of the widget's console, and a throwing hook breaks nothing", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const onDebugEvent = vi.fn(() => {

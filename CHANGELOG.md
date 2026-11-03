@@ -11,6 +11,7 @@
 ### Fixed
 
 - Embed widget: `destroy()` while the session was still connecting (for example during the microphone permission prompt) left the session running. The session that resolves afterwards is now disconnected at once and never handed to `onSession`, the transcript or the status line.
+- Embed widget: clicking Connect while a start was pending started a second session. The button now reads "Cancel" while connecting; clicking it cancels the pending start (a session that resolves late is disconnected and never handed to `onSession`), and further clicks are ignored until the start has settled, after which Connect works again.
 
 ## [0.21.1] - 2026-11-03
 
