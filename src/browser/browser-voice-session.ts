@@ -539,6 +539,8 @@ export async function connectBrowserVoiceSession(
   const peerId = options.peerId ?? defaultPeerId();
   const roomId = options.credentials.room_id;
   const orchestratorSessionId = options.credentials.session_id;
+  // identify sends this: the server checks the digest of the start token, not a reconnect token.
+  const startJoinToken = options.credentials.join_token;
   /** Mutable join credentials — updated by inbound `session_reconnect_token`. */
   const joinCredentials: SessionCredentials = { ...options.credentials };
   const rebuildSignalingUrl = (): string =>
@@ -2814,13 +2816,15 @@ export async function connectBrowserVoiceSession(
         endUser: "endUser" in input ? input.endUser : undefined,
       });
       if (!options.apiBase || !options.projectId) {
-        throw new TypeError("identify needs apiBase and projectId in the connect options");
+        throw new TypeError(
+          "identify needs apiBase and projectId in the connect options",
+        );
       }
       const result = await postEndUserIdentify({
         apiBase: options.apiBase,
         orchestratorSessionId,
         projectId: options.projectId,
-        joinToken: joinCredentials.join_token,
+        joinToken: startJoinToken,
         headers: options.apiHeaders,
         input,
       }).catch((error: unknown) => {

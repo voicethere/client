@@ -187,7 +187,7 @@ async function connectWithControl(
     MockPeerConnection.instances[MockPeerConnection.instances.length - 1]!;
   pc.ondatachannel?.({ channel } as RTCDataChannelEvent);
   channel.onopen?.(new Event("open"));
-  return { session, sent };
+  return { session, sent, channel };
 }
 
 describe("identify and logout", () => {
@@ -279,6 +279,42 @@ describe("identify and logout", () => {
       .catch((e: unknown) => e)) as { name: string; retryable: boolean };
     expect(error.name).toBe("EndUserAuthUnavailableError");
     expect(error.retryable).toBe(true);
+  });
+
+  it("identify sends the start join token after a session_reconnect_token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        end_user: { id: "u-1", verified: true },
+        result: "unchanged",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { session, channel } = await connectWithControl();
+    channel.onmessage?.({
+      data: JSON.stringify({
+        type: "session_reconnect_token",
+        token: "rt-2",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    } as MessageEvent);
+
+    await session.identify({ endUserToken: "tok" });
+
+    const init = fetchMock.mock.calls[0]![1];
+    expect(JSON.parse(init.body).join_token).toBe("jt-9");
+  });
+
+  it("identify without apiBase/projectId throws TypeError and makes no request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { session } = await connectWithControl({
+      apiBase: undefined,
+      projectId: undefined,
+    });
+    await expect(
+      session.identify({ endUserToken: "t" }),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("logout sends session_close with reason end_user_logout and closes the session", async () => {
