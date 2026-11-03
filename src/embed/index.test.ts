@@ -51,11 +51,10 @@ type MockElement = {
   setAttribute: (name: string, value?: string) => void;
   getAttribute: (name: string) => string | null;
   querySelector: (selector: string) => MockElement | null;
-  addEventListener: (
-    type: string,
-    handler: (event: { key: string }) => void,
-  ) => void;
+  addEventListener: (type: string, handler: (event: never) => void) => void;
   click: () => void;
+  contains: (node: unknown) => boolean;
+  clickListeners: Array<(event: { target?: unknown }) => void>;
   placeholder?: string;
   title?: string;
   type?: string;
@@ -150,10 +149,18 @@ function createMockElement(tag: string): MockElement {
       }
       return null;
     },
-    addEventListener(type: string, handler: (event: { key: string }) => void) {
+    addEventListener(type: string, handler: (event: never) => void) {
       if (type === "keydown") {
-        this.onkeydown = handler;
+        this.onkeydown = handler as (event: { key: string }) => void;
       }
+      if (type === "click") {
+        this.clickListeners.push(handler as never);
+      }
+    },
+    clickListeners: [],
+    contains(node: unknown): boolean {
+      if (node === this) return true;
+      return this.children.some((c: MockElement) => c.contains(node));
     },
     click() {
       this.onclick?.();
@@ -1205,6 +1212,33 @@ describe("createVoiceThereWidget spoken text reveal", () => {
     expect(bubbleTexts()).toEqual(["One two"]);
   });
 
+  it("a spoken reveal updates the text and keeps the bubble's time", async () => {
+    const { onControlMessage } = await connectAndGetHandler({});
+    onControlMessage({
+      type: "assistant_delta",
+      turnId: "t1",
+      text: "One two three four five.",
+      spoken: true,
+    });
+    onControlMessage({ type: "speech_event", event: "agent_speaking_start" });
+    const turnBubbles = () =>
+      createdElements.filter((el) => el.attrs["data-voicethere-turn"] === "t1");
+    expect(turnBubbles()).toHaveLength(1);
+    const timeOf = (b: MockElement) =>
+      b.children.filter((c) => c.tagName === "TIME");
+    const firstDatetime = timeOf(turnBubbles()[0]!)[0]!.attrs.datetime;
+    expect(firstDatetime).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(turnBubbles()).toHaveLength(1);
+    const times = timeOf(turnBubbles()[0]!);
+    expect(times).toHaveLength(1);
+    expect(times[0]!.attrs.datetime).toBe(firstDatetime);
+    const textEl = turnBubbles()[0]!.children.find((c) =>
+      c.classList.contains(WIDGET_CSS_CLASSES.msgText),
+    )!;
+    expect(textEl.textContent).toBe("One two three four five.");
+  });
+
   it("streamSpokenText: false paces nothing: a spoken turn is shown in full at once", async () => {
     const { onControlMessage } = await connectAndGetHandler({
       streamSpokenText: false,
@@ -1565,7 +1599,7 @@ describe("createVoiceThereWidget bubbles, times, inline display and session prov
       ["incoming", "filler", "t1"],
       ["incoming", "link", "t1"],
       ["incoming", "reply", "t1"],
-      ["incoming", "speech", undefined],
+      ["outgoing", "speech", undefined],
       ["outgoing", "chat", undefined],
     ]);
     // System bubbles carry no time; all others do.
@@ -1577,6 +1611,54 @@ describe("createVoiceThereWidget bubbles, times, inline display and session prov
       true,
       true,
     ]);
+  });
+
+  it("a click on the link bubble outside the anchor opens the link once", async () => {
+    vi.stubGlobal(
+      "Node",
+      class {
+        static [Symbol.hasInstance](v: unknown) {
+          return typeof v === "object" && v !== null;
+        }
+      },
+    );
+    const { onAgentContent } = await connect();
+    onAgentContent({
+      turnId: "t1",
+      spoken: false,
+      content: { kind: "link", url: "https://example.com/x", label: "X" },
+    });
+    const bubble = bubbles()[0]!;
+    const anchor = bubble.children.find((c) => c.tagName === "A")!;
+    const clickSpy = vi.fn();
+    anchor.click = clickSpy;
+    expect(bubble.clickListeners).toHaveLength(1);
+    bubble.clickListeners[0]!({ target: bubble });
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    bubble.clickListeners[0]!({ target: anchor.children[1] });
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a user stt_final bubble renders on the outgoing side, agent speech stays incoming", async () => {
+    const { onControlMessage } = await connect();
+    onControlMessage({
+      type: "speech_event",
+      event: "stt_final",
+      text: "caller words",
+    });
+    onControlMessage({
+      type: "speech_event",
+      event: "agent_speech",
+      text: "agent words",
+    });
+    const [user, agent] = bubbles();
+    expect(attr(user!, "data-voicethere-role")).toBe("outgoing");
+    expect(attr(user!, "data-voicethere-kind")).toBe("speech");
+    expect(user!.classList.contains(WIDGET_CSS_CLASSES.msgOutgoing)).toBe(true);
+    expect(user!.style.alignSelf).toBe("flex-end");
+    expect(timeOf(user!)).toBeDefined();
+    expect(attr(agent!, "data-voicethere-role")).toBe("incoming");
+    expect(attr(agent!, "data-voicethere-kind")).toBe("reply");
   });
 
   it("a link bubble is a button: icon plus label, https only, new tab", async () => {

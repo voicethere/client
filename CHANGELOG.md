@@ -16,6 +16,7 @@
 ### Changed
 
 - **Message times are on by default.** Each non-system bubble now shows the local time of the message in a `<time datetime="…">` element under its text. To hide them, set `theme.chat.timestamps.show` to `false` (inline option or CDN config). `theme.chat.timestamps.format` is `"auto"` (browser locale, default), `"12h"` or `"24h"`, and `theme.chat.timestamps.color` sets a hex colour. The time is set when the bubble is created and a spoken reveal does not change it.
+- Your own spoken words now show on your side of the chat, like typed messages.
 - A bubble's text now sits in a `.vt-widget-msg-text` span inside the bubble. New classes: `vt-widget-msg-time`, `vt-widget-msg--filler`, `vt-widget-msg--link`.
 
 ## [0.19.0] - 2026-11-02

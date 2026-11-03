@@ -1114,10 +1114,19 @@ function buildVoiceThereWidget(
           }
           const incoming = incomingTextFromControlMessage(payload);
           if (incoming) {
-            addBubble("incoming", controlMessageKind(payload), incoming, {
-              turnId:
-                typeof payload.turnId === "string" ? payload.turnId : undefined,
-            });
+            const kind = controlMessageKind(payload);
+            // The caller's own words sit on the user side, like typed chat.
+            addBubble(
+              kind === "speech" ? "outgoing" : "incoming",
+              kind,
+              incoming,
+              {
+                turnId:
+                  typeof payload.turnId === "string"
+                    ? payload.turnId
+                    : undefined,
+              },
+            );
           }
         },
         onAgentContent: (event) => {
