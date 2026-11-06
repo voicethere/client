@@ -1261,8 +1261,11 @@ function buildVoiceThereWidget(
         spokenCaption.handleControlMessage(payload);
         return;
       }
-      if (runtime.streamSpokenText && payload.type === "speech_event") {
-        // Default: speech events only pace spoken turns; typed text below is unchanged.
+      if (
+        runtime.streamSpokenText &&
+        (payload.type === "speech_event" || payload.type === "agent_speak")
+      ) {
+        // Default: speech events and queued speech only pace spoken turns; typed text below is unchanged.
         spokenCaption.handleControlMessage(payload);
       }
       const incoming = incomingTextFromControlMessage(payload);

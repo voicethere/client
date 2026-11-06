@@ -1214,6 +1214,33 @@ describe("createVoiceThereWidget spoken text reveal", () => {
     expect(bubbleTexts()).toEqual(["One two"]);
   });
 
+  it("default: agent_speak after a spoken done holds the text until agent_speaking_start", async () => {
+    const { onControlMessage } = await connectAndGetHandler({});
+    const speakText = "One two three.";
+    const shownAlone = () =>
+      createdElements.some((el) => el.textContent === speakText);
+    onControlMessage({
+      type: "assistant_delta",
+      turnId: "t1",
+      text: "One two three.",
+      spoken: true,
+    });
+    onControlMessage({
+      type: "assistant_done",
+      turnId: "t1",
+      text: "One two three.",
+      spoken: true,
+      status: "completed",
+    });
+    onControlMessage({ type: "agent_speak", text: speakText });
+    expect(shownAlone()).toBe(false);
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(bubbleTexts()).toEqual([]);
+    expect(shownAlone()).toBe(false);
+    onControlMessage({ type: "speech_event", event: "agent_speaking_start" });
+    expect(bubbleTexts()).toEqual(["One"]);
+  });
+
   it("a spoken reveal updates the text and keeps the bubble's time", async () => {
     const { onControlMessage } = await connectAndGetHandler({});
     onControlMessage({

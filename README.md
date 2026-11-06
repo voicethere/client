@@ -311,7 +311,7 @@ const session = await connectBrowserSession({
 - `spokenTextReveal` is `"playback"` by default: the reveal follows `agent_speaking_start` / `agent_speaking_end`, pauses between spoken chunks, and stops at what was heard on `barge_in` or when `assistant_done` has `status` other than `completed`. Set `spokenTextReveal: "immediate"` to get each sentence at once.
 - Typed turns (`assistant_delta` / `assistant_done` without `spoken`) are reported at once with `spoken: false`. The `chat_reply` that follows them repeats the same text and is not reported.
 - `onControlMessage` still receives every raw message.
-- A spoken turn is never shown before its audio: it waits for `agent_speaking_start`. If a completed reply never gets one, the full text is shown after 5 seconds.
+- A spoken turn is never shown before its audio: it waits for `agent_speaking_start`. If a completed reply never gets audio, its full text is shown 5 s after it ends when no speech was queued for it. Once its speech is queued (`agent_speak`), the text waits for the audio and is shown in full when the server reports `agent_speak_failed`, or at most 40 s after the speech was queued.
 - The embed widget option `streamSpokenText` has three values: unset (default) paces spoken replies and shows plain `chat_reply` text at once; `true` paces spoken replies and `chat_reply` text; `false` paces nothing and shows spoken replies at once.
 
 ## Embed widget customization

@@ -1,9 +1,19 @@
 const START_FALLBACK_MS = 400;
 /**
- * A completed spoken turn whose audio never starts shows its full text after this wait.
+ * A completed spoken turn whose audio never starts, and for which the agent never queued speech
+ * (`agent_speak`), shows its full text after this wait (phase A: done → speech queued).
  * Internal: spoken turns never use START_FALLBACK_MS, they wait for `agent_speaking_start`.
  */
 const SPOKEN_START_FALLBACK_MS = 5000;
+/**
+ * Phase B: once the turn's speech is queued (`agent_speak` after its first delta), the reveal
+ * waits up to this long for `agent_speaking_start`. The speech server waits at most 30 s
+ * (`SPEECH_TTS_OPEN_WAIT_MAX_MS`) for a synthesis to open and then reports `agent_speak_failed`,
+ * which shows the text at once; the measured staging `agent_speak` → `agent_speaking_start` p95
+ * was 1.8 s (n=802, every turn, not only greetings; max 4.4 s), so 30 s + 2 × p95 fits. This is
+ * only a last-resort net.
+ */
+const SPOKEN_QUEUED_FALLBACK_MS = 40_000;
 const DEFAULT_MS_PER_WORD = 330;
 /**
  * speech_event carries no turnId, and the agent sends each sentence's assistant_delta before
@@ -70,6 +80,10 @@ type SpokenTurn = {
   firstChunk: string;
   /** An agent_speaking_start belongs to this turn. */
   audioStarted: boolean;
+  /** An agent_speak arrived after this turn's first delta, before its audio started. */
+  speakQueued: boolean;
+  /** agent_speak_failed arrived before this turn was done and before its audio started. */
+  speakFailed: boolean;
 };
 
 export type SpokenChatCaption = {
@@ -528,6 +542,62 @@ export function createSpokenChatCaption(
     }
   };
 
+  /** The current spoken turn's reveal still waits for its audio (no start, not frozen). */
+  const pendingWithoutAudio = (): {
+    turn: SpokenTurn;
+    pending: UtteranceState;
+  } | null => {
+    const turn = currentSpoken;
+    const pending = state;
+    if (
+      !turn ||
+      !turn.firstChunk ||
+      turn.audioStarted ||
+      turn.frozen ||
+      !pending ||
+      pending.utteranceId !== turn.turnId ||
+      pending.revealStarted ||
+      pending.frozen
+    ) {
+      return null;
+    }
+    return { turn, pending };
+  };
+
+  const armSpokenFallback = (pending: UtteranceState, ms: number): void => {
+    clearUtteranceTimers(pending);
+    pending.startTimeoutId = setTimeoutFn(() => {
+      pending.startTimeoutId = undefined;
+      if (state !== pending || pending.revealStarted || pending.frozen) return;
+      snapToFull(pending);
+    }, ms);
+  };
+
+  /**
+   * `agent_speak` carries no turnId. It counts for the current spoken turn only after that turn's
+   * first delta (the agent sends each sentence's delta before its speak), so a thinking filler
+   * spoken before the turn's text does not extend the turn's fallback.
+   */
+  const handleAgentSpeak = (): void => {
+    const found = pendingWithoutAudio();
+    if (!found) return;
+    found.turn.speakQueued = true;
+    if (found.pending.startTimeoutId !== undefined) {
+      armSpokenFallback(found.pending, SPOKEN_QUEUED_FALLBACK_MS);
+    }
+  };
+
+  /** The speech server could not synthesize the reply: its audio will never start. */
+  const handleAgentSpeakFailed = (): void => {
+    const found = pendingWithoutAudio();
+    if (!found) return;
+    if (found.turn.done) {
+      snapToFull(found.pending);
+    } else {
+      found.turn.speakFailed = true;
+    }
+  };
+
   /** Makes `turn` the current spoken turn; it claims an unclaimed audio start. */
   const claimSpoken = (turn: SpokenTurn): void => {
     if (currentSpoken !== turn) {
@@ -573,6 +643,8 @@ export function createSpokenChatCaption(
         finalReported: false,
         firstChunk: "",
         audioStarted: false,
+        speakQueued: false,
+        speakFailed: false,
       };
       spokenTurns.set(turnId, turn);
       while (spokenTurns.size > COMPLETED_IDS_MAX) {
@@ -594,7 +666,8 @@ export function createSpokenChatCaption(
         }
         return;
       }
-      const lateStatus = typeof payload.status === "string" ? payload.status : "";
+      const lateStatus =
+        typeof payload.status === "string" ? payload.status : "";
       if (
         lateStatus === "interrupted" ||
         lateStatus === "cancelled" ||
@@ -677,13 +750,18 @@ export function createSpokenChatCaption(
       !pending.frozen &&
       !turn.audioStarted
     ) {
-      // Audio that never starts must not hide a completed reply forever.
-      clearUtteranceTimers(pending);
-      pending.startTimeoutId = setTimeoutFn(() => {
-        pending.startTimeoutId = undefined;
-        if (state !== pending || pending.revealStarted || pending.frozen) return;
+      // Audio that never starts must not hide a completed reply forever. One bound per phase:
+      // done → speech queued, then queued speech → audio start.
+      if (turn.speakFailed) {
         snapToFull(pending);
-      }, SPOKEN_START_FALLBACK_MS);
+      } else {
+        armSpokenFallback(
+          pending,
+          turn.speakQueued
+            ? SPOKEN_QUEUED_FALLBACK_MS
+            : SPOKEN_START_FALLBACK_MS,
+        );
+      }
     }
     if (!stopped) scheduleClaimedStart(turn);
     // Nothing visible changed since the last emit but the turn is now final.
@@ -707,6 +785,11 @@ export function createSpokenChatCaption(
       handleSpokenAssistant(type, payload, payload.turnId);
       return;
     }
+    if (type === "agent_speak") {
+      // Text queued for speech: it paces the reveal and is never shown as agent text.
+      if (enabled) handleAgentSpeak();
+      return;
+    }
     if (type === "chat_reply") {
       handleChatReply(payload);
       return;
@@ -714,6 +797,7 @@ export function createSpokenChatCaption(
     if (type === "speech_event") {
       if (enabled) {
         const event = typeof payload.event === "string" ? payload.event : "";
+        if (event === "agent_speak_failed") handleAgentSpeakFailed();
         if (event !== "barge_in") trackSpokenSpeechEvent(event);
         handleSpeechEvent(payload);
         if (event === "barge_in") trackSpokenSpeechEvent(event);
@@ -857,8 +941,8 @@ export function createAgentTextReveal(opts: {
   return {
     handleControlMessage(payload) {
       const type = typeof payload.type === "string" ? payload.type : "";
-      if (type === "speech_event") {
-        // Speech events pace the reveal; without playback there is nothing to pace.
+      if (type === "speech_event" || type === "agent_speak") {
+        // Speech events and queued speech pace the reveal; without playback there is nothing to pace.
         if (playback) caption.handleControlMessage(payload);
         return;
       }
