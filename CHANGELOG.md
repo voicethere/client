@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-11-06
+
+### Fixed
+
+- A spoken reply whose audio started late was shown in full before the agent spoke. The 5 s fallback for audio that never starts began when the reply ended, and a greeting can end before its speech starts (a slow text-to-speech start can take longer than 5 s). Once the agent queues speech for the reply (`agent_speak`), `onAgentText` and the spoken caption now wait for the audio, show the full text at once when the server reports `agent_speak_failed`, and give up after 40 s. A reply with no queued speech still shows its full text 5 s after it ends. `agent_speak` is never shown as agent text.
+
 ## [0.24.0] - 2026-11-03
 
 ### Added

@@ -619,3 +619,117 @@ describe("first sentence once audio started", () => {
     }
   });
 });
+
+describe("spoken fallback anchored on agent_speak", () => {
+  const agentSpeak = (text: string) => ({ type: "agent_speak", text });
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("greeting: done, then agent_speak, then agent_speaking_start 12 s later", () => {
+    const { reveal, updates, lastText } = setup();
+    reveal.handleControlMessage(delta("greet-1", "Hello there, welcome back."));
+    reveal.handleControlMessage(done("greet-1", "Hello there, welcome back."));
+    reveal.handleControlMessage(agentSpeak("Hello there, welcome back."));
+    vi.advanceTimersByTime(12_000);
+    expect(updates).toEqual([]);
+    reveal.handleControlMessage(speech("agent_speaking_start"));
+    expect(lastText("greet-1")).toBe("Hello");
+    vi.advanceTimersByTime(330);
+    expect(lastText("greet-1")).toBe("Hello there,");
+    vi.advanceTimersByTime(330 * 3);
+    expect(lastText("greet-1")).toBe("Hello there, welcome back.");
+    expect(updates.at(-1)!.final).toBe(true);
+  });
+
+  it("agent_speak but audio never starts: full text at SPOKEN_QUEUED_FALLBACK_MS, not at 5 s", () => {
+    const { reveal, updates } = setup();
+    reveal.handleControlMessage(delta("A", "One two three."));
+    reveal.handleControlMessage(agentSpeak("One two three."));
+    reveal.handleControlMessage(done("A", "One two three."));
+    vi.advanceTimersByTime(5_000);
+    expect(updates).toEqual([]);
+    vi.advanceTimersByTime(40_000 - 5_000 - 1);
+    expect(updates).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(updates).toEqual([
+      { turnId: "A", text: "One two three.", spoken: true, final: true },
+    ]);
+  });
+
+  it("no agent_speak: full text at 5 s (unchanged)", () => {
+    const { reveal, updates } = setup();
+    reveal.handleControlMessage(delta("A", "One two three."));
+    reveal.handleControlMessage(done("A", "One two three."));
+    vi.advanceTimersByTime(4_999);
+    expect(updates).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(updates).toEqual([
+      { turnId: "A", text: "One two three.", spoken: true, final: true },
+    ]);
+  });
+
+  it("agent_speak_failed after agent_speak: full text at once", () => {
+    const { reveal, updates } = setup();
+    reveal.handleControlMessage(delta("A", "One two three."));
+    reveal.handleControlMessage(done("A", "One two three."));
+    reveal.handleControlMessage(agentSpeak("One two three."));
+    vi.advanceTimersByTime(1_000);
+    expect(updates).toEqual([]);
+    reveal.handleControlMessage(speech("agent_speak_failed"));
+    expect(updates).toEqual([
+      { turnId: "A", text: "One two three.", spoken: true, final: true },
+    ]);
+    vi.advanceTimersByTime(60_000);
+    expect(updates).toHaveLength(1);
+  });
+
+  it("agent_speak_failed before the done: the done shows the full text at once", () => {
+    const { reveal, updates } = setup();
+    reveal.handleControlMessage(delta("A", "One two three."));
+    reveal.handleControlMessage(agentSpeak("One two three."));
+    reveal.handleControlMessage(speech("agent_speak_failed"));
+    expect(updates).toEqual([]);
+    reveal.handleControlMessage(done("A", "One two three."));
+    expect(updates).toEqual([
+      { turnId: "A", text: "One two three.", spoken: true, final: true },
+    ]);
+  });
+
+  it("agent_speak before the turn's first delta (filler) does not extend the turn's fallback", () => {
+    const { reveal, updates } = setup();
+    reveal.handleControlMessage(agentSpeak("Let me check."));
+    reveal.handleControlMessage(delta("A", "One two three."));
+    reveal.handleControlMessage(done("A", "One two three."));
+    vi.advanceTimersByTime(5_000);
+    expect(updates).toEqual([
+      { turnId: "A", text: "One two three.", spoken: true, final: true },
+    ]);
+  });
+
+  it("agent_speak is never emitted as agent text", () => {
+    const { reveal, updates } = setup();
+    reveal.handleControlMessage(agentSpeak("Hello there."));
+    vi.advanceTimersByTime(60_000);
+    expect(updates).toEqual([]);
+
+    const immediate = setup("immediate");
+    immediate.reveal.handleControlMessage(agentSpeak("Hello there."));
+    expect(immediate.updates).toEqual([]);
+
+    for (const enabled of [true, false]) {
+      const shown: string[] = [];
+      const caption = createSpokenChatCaption({
+        enabled,
+        onUpsert: (_id, text) => shown.push(text),
+      });
+      caption.handleControlMessage(agentSpeak("Hello there."));
+      vi.advanceTimersByTime(60_000);
+      expect(shown).toEqual([]);
+      caption.dispose();
+    }
+  });
+});
