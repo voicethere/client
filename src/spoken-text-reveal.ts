@@ -10,7 +10,8 @@ const SPOKEN_START_FALLBACK_MS = 5000;
  * waits up to this long for `agent_speaking_start`. The speech server waits at most 30 s
  * (`SPEECH_TTS_OPEN_WAIT_MAX_MS`) for a synthesis to open and then reports `agent_speak_failed`,
  * which shows the text at once; the measured staging `agent_speak` → `agent_speaking_start` p95
- * was 1.8 s (max 4.4 s), so 30 s + 2 × p95 fits. This is only a last-resort net.
+ * was 1.8 s (n=802, every turn, not only greetings; max 4.4 s), so 30 s + 2 × p95 fits. This is
+ * only a last-resort net.
  */
 const SPOKEN_QUEUED_FALLBACK_MS = 40_000;
 const DEFAULT_MS_PER_WORD = 330;
