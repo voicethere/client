@@ -98,7 +98,8 @@ export function findWallClockBounds(source: string, fileName: string): number[] 
         mark(names);
       } else if (
         ts.isBinaryExpression(n) &&
-        n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        n.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
         ts.isIdentifier(n.left) &&
         containsTiming(n.right, tainted)
       ) {
@@ -161,6 +162,7 @@ describe("findWallClockBounds", () => {
       "const [s] = process.hrtime(start);\nexpect(s).toBeLessThan(1);",
     ],
     ["process.hrtime.bigint", "expect(process.hrtime.bigint() - t).toBeLessThan(10n);"],
+    ["compound assignment", "let total = 0;\ntotal += performance.now() - t0;\nexpect(total).toBeLessThan(5);"],
     ["plain assignment", "let t;\nt = performance.now();\nexpect(t).toBeGreaterThan(0);"],
     ["expect.soft", "expect.soft(Date.now() - t0).toBeLessThan(100);"],
     ["expect.poll", "expect.poll(() => Date.now() - t0).toBeLessThan(100);"],
