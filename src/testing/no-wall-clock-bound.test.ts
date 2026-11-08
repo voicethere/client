@@ -155,13 +155,7 @@ describe("findWallClockBounds", () => {
 });
 
 // Each entry needs a concrete reason; a stale entry (file gone or no longer a hit) fails.
-const ALLOWLIST: Array<{ file: string; reason: string }> = [
-  {
-    file: "src/browser/browser-voice-session-recovery.test.ts",
-    reason:
-      "Remaining hits assert recovery.downtimeMs inside tests that run under vi.useFakeTimers(); the library's Date.now() is the fake clock, advanced only by advanceTimersByTimeAsync, so the bound is causal. (Flagged because the connectReady helper contains Date.now().)",
-  },
-];
+const ALLOWLIST: Array<{ file: string; reason: string }> = [];
 
 function listTests(dir: string, out: string[]): void {
   for (const e of readdirSync(dir, { withFileTypes: true })) {

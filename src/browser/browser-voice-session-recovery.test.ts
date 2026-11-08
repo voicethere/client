@@ -205,7 +205,7 @@ const credentials = {
   join_token: "join",
   signaling_url: "ws://127.0.0.1:8080/ws",
   ice_servers: [],
-  expires_at: new Date(Date.now() + 60_000).toISOString(),
+  expires_at: "2099-01-01T00:00:00.000Z",
 };
 
 const runtime = (): WebRtcRuntime => ({
