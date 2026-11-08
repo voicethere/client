@@ -205,7 +205,7 @@ const credentials = {
   join_token: "join",
   signaling_url: "ws://127.0.0.1:8080/ws",
   ice_servers: [],
-  expires_at: new Date(Date.now() + 60_000).toISOString(),
+  expires_at: "2099-01-01T00:00:00.000Z",
 };
 
 const runtime = (): WebRtcRuntime => ({
@@ -1031,7 +1031,6 @@ describe("reconnect token rejected by the gateway (Node ws)", () => {
       openDataChannels(MockPeerConnection.instances[0]!);
       await session.waitForConnected(1_000);
 
-      const startedAt = Date.now();
       serverSockets[0]!.terminate();
       await vi.waitFor(
         () =>
@@ -1040,7 +1039,6 @@ describe("reconnect token rejected by the gateway (Node ws)", () => {
           ).toBe(true),
         { timeout: 2_000 },
       );
-      expect(Date.now() - startedAt).toBeLessThan(2_000);
       expect(errors.some((e) => e.code === "WEBRTC_RECONNECT_EXHAUSTED")).toBe(
         false,
       );
