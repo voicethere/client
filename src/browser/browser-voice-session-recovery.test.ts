@@ -1031,7 +1031,6 @@ describe("reconnect token rejected by the gateway (Node ws)", () => {
       openDataChannels(MockPeerConnection.instances[0]!);
       await session.waitForConnected(1_000);
 
-      const startedAt = Date.now();
       serverSockets[0]!.terminate();
       await vi.waitFor(
         () =>
@@ -1040,7 +1039,6 @@ describe("reconnect token rejected by the gateway (Node ws)", () => {
           ).toBe(true),
         { timeout: 2_000 },
       );
-      expect(Date.now() - startedAt).toBeLessThan(2_000);
       expect(errors.some((e) => e.code === "WEBRTC_RECONNECT_EXHAUSTED")).toBe(
         false,
       );

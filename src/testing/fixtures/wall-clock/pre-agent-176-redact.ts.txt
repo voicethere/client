@@ -1,0 +1,19 @@
+declare const r: { redact(s: string): string };
+declare const cases: Array<(n: number) => string>;
+it("redact is linear", () => {
+  const cpuMs = (input: string): number => {
+    let best = Infinity;
+    for (let i = 0; i < 5; i++) {
+      const t0 = process.cpuUsage();
+      r.redact(input);
+      const d = process.cpuUsage(t0);
+      best = Math.min(best, (d.user + d.system) / 1000);
+    }
+    return best;
+  };
+  for (const make of cases) {
+    const small = Math.max(cpuMs(make(5_000)), 1);
+    const large = cpuMs(make(50_000));
+    expect(large / small).toBeLessThan(40);
+  }
+});
