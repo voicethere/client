@@ -505,4 +505,74 @@ describe("connectBrowserVoiceSession microphone APIs", () => {
     expect(session.getAudioPlaybackState()).toBe("blocked");
     expect(onAudioPlayback).toHaveBeenCalledWith("blocked");
   });
+
+  it("does not report blocked when the host's onAgentAudioTrack replaces srcObject and aborts play()", async () => {
+    MockWebSocket.instances = [];
+    MockPeerConnection.instances = [];
+
+    const remoteTrack = {
+      kind: "audio",
+      readyState: "live",
+    } as MediaStreamTrack;
+    const remoteStream = {
+      id: "remote",
+      getAudioTracks: () => [remoteTrack],
+    } as MediaStream;
+    const hostStream = { id: "host" } as MediaStream;
+
+    const onAudioPlayback = vi.fn();
+    const audioElement = {
+      srcObject: null as MediaStream | null,
+      play: vi.fn(function (this: { srcObject: MediaStream | null }) {
+        const before = this.srcObject;
+        return new Promise<void>((resolve, reject) => {
+          queueMicrotask(() => {
+            if (this.srcObject !== before) {
+              reject(
+                new DOMException(
+                  "interrupted by a new load request",
+                  "AbortError",
+                ),
+              );
+            } else resolve();
+          });
+        });
+      }),
+    } as unknown as HTMLAudioElement;
+
+    const session = await connectBrowserVoiceSession({
+      credentials,
+      requestMic: true,
+      readiness: "data",
+      runtime: createDeniedMicRuntime(),
+      audioElement,
+      onAudioPlayback,
+      onAgentAudioTrack: () => {
+        audioElement.srcObject = hostStream;
+      },
+    });
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.onmessage?.({
+      data: JSON.stringify({
+        type: "offer",
+        peerId: VOICE_AGENT_SERVER_PEER_ID,
+        sdp: { type: "offer", sdp: "v=0\na=ice-ufrag:abc\n" },
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const pc = MockPeerConnection.instances[0]!;
+    pc.ontrack?.({
+      track: remoteTrack,
+      streams: [remoteStream],
+    } as RTCTrackEvent);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(audioElement.srcObject).toBe(hostStream);
+    expect(audioElement.play).toHaveBeenCalledTimes(2);
+    expect(onAudioPlayback).not.toHaveBeenCalledWith("blocked");
+    expect(session.getAudioPlaybackState()).toBe("playing");
+  });
 });

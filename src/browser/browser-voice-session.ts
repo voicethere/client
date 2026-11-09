@@ -86,7 +86,7 @@ import {
 } from "./microphone.js";
 import {
   createHiddenAudioElement,
-  unlockAudioPlayback as unlockAudioPlaybackElement,
+  playAudioElement,
   type AudioPlaybackState,
 } from "./audio-playback.js";
 
@@ -593,12 +593,15 @@ export async function connectBrowserVoiceSession(
   };
   const attemptInboundAudioPlayback = async (): Promise<void> => {
     if (!playbackAudioElement) return;
-    const ok = await unlockAudioPlaybackElement(playbackAudioElement);
-    if (ok) {
+    const outcome = await playAudioElement(playbackAudioElement);
+    if (outcome === "playing") {
       setAudioPlaybackState("playing");
-    } else {
+    } else if (outcome === "blocked") {
       debug?.warn("webrtc", "audio_playback_blocked");
       setAudioPlaybackState("blocked");
+    } else {
+      // Interrupted twice by new loads: the browser did not block anything.
+      debug?.warn("webrtc", "audio_playback_interrupted");
     }
   };
   /** ICE candidates queued by negotiation generation until that PC is ready. */
@@ -2765,14 +2768,16 @@ export async function connectBrowserVoiceSession(
     getAudioPlaybackState: () => audioPlaybackState,
     unlockAudioPlayback: async () => {
       if (!playbackAudioElement) return false;
-      const ok = await unlockAudioPlaybackElement(playbackAudioElement);
-      if (ok) {
+      const outcome = await playAudioElement(playbackAudioElement);
+      if (outcome === "playing") {
         setAudioPlaybackState("playing");
-      } else {
+      } else if (outcome === "blocked") {
         debug?.warn("webrtc", "audio_playback_blocked");
         setAudioPlaybackState("blocked");
+      } else {
+        debug?.warn("webrtc", "audio_playback_interrupted");
       }
-      return ok;
+      return outcome === "playing";
     },
     getConnectionState: () => connectionState,
     getConnectionStatus: () =>
