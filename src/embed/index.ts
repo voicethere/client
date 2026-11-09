@@ -391,6 +391,13 @@ function isMicLimitedState(state: AudioInputState): boolean {
   return state === "denied" || state === "unavailable" || state === "synthetic";
 }
 
+function speakerIconSvg(size: number, muted: boolean): string {
+  const mark = muted
+    ? '<line x1="16" y1="9" x2="22" y2="15"/><line x1="22" y1="9" x2="16" y2="15"/>'
+    : '<path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>';
+  return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>${mark}</svg>`;
+}
+
 function isVoiceSessionMode(mode: BrowserSessionMode): boolean {
   return (
     mode === BrowserSessionModeType.Voice ||
@@ -709,7 +716,11 @@ function buildVoiceThereWidget(
   closeBtn.style.fontSize = "20px";
   closeBtn.style.lineHeight = "1";
   closeBtn.style.color = "inherit";
-  header.append(headerTitle, closeBtn);
+  const headerActions = document.createElement("div");
+  headerActions.style.display = "flex";
+  headerActions.style.alignItems = "center";
+  headerActions.style.gap = "6px";
+  header.append(headerTitle, headerActions);
 
   const greeting = document.createElement("div");
   greeting.className = WIDGET_CSS_CLASSES.greeting;
@@ -793,27 +804,43 @@ function buildVoiceThereWidget(
   playbackWarning.className = WIDGET_CSS_CLASSES.playbackWarning;
   playbackWarning.setAttribute("data-voicethere-playback-warning", "");
   playbackWarning.style.display = "none";
-  playbackWarning.style.fontSize = "11px";
+  playbackWarning.style.alignItems = "center";
+  playbackWarning.style.gap = "8px";
+  playbackWarning.style.padding = "8px 10px";
+  playbackWarning.style.borderRadius = "10px";
+  playbackWarning.style.fontSize = "12px";
   playbackWarning.style.lineHeight = "1.4";
   playbackWarning.style.marginBottom = "8px";
-  playbackWarning.style.padding = "8px";
-  playbackWarning.style.borderRadius = "8px";
-  playbackWarning.style.background = "rgba(245, 158, 11, 0.15)";
-  playbackWarning.style.border = "1px solid rgba(245, 158, 11, 0.35)";
-  playbackWarning.style.color = "#fcd34d";
-  playbackWarning.textContent = "Tap to enable sound.";
+  playbackWarning.style.background =
+    "color-mix(in srgb, var(--vt-color-primary) 12%, transparent)";
+  playbackWarning.style.border =
+    "1px solid color-mix(in srgb, var(--vt-color-primary) 35%, transparent)";
+  playbackWarning.style.color = "inherit";
+
+  const playbackIcon = document.createElement("span");
+  playbackIcon.setAttribute("aria-hidden", "true");
+  playbackIcon.style.display = "inline-flex";
+  playbackIcon.style.flexShrink = "0";
+  playbackIcon.innerHTML = speakerIconSvg(14, true);
+
+  const playbackText = document.createElement("span");
+  playbackText.style.flex = "1";
+  playbackText.textContent = "Sound is off in this browser.";
 
   const playbackEnableBtn = document.createElement("button");
   playbackEnableBtn.setAttribute("data-voicethere-playback-enable", "");
   playbackEnableBtn.type = "button";
   playbackEnableBtn.textContent = "Enable sound";
-  playbackEnableBtn.style.marginTop = "6px";
-  playbackEnableBtn.style.padding = "6px 10px";
-  playbackEnableBtn.style.borderRadius = "6px";
+  playbackEnableBtn.style.marginLeft = "auto";
+  playbackEnableBtn.style.flexShrink = "0";
+  playbackEnableBtn.style.whiteSpace = "nowrap";
+  playbackEnableBtn.style.padding = "4px 12px";
+  playbackEnableBtn.style.borderRadius = "999px";
   playbackEnableBtn.style.border = "none";
+  playbackEnableBtn.style.fontSize = "12px";
+  playbackEnableBtn.style.fontWeight = "600";
   playbackEnableBtn.style.cursor = "pointer";
-  playbackEnableBtn.style.fontSize = "11px";
-  playbackWarning.append(playbackEnableBtn);
+  playbackWarning.append(playbackIcon, playbackText, playbackEnableBtn);
 
   const transcript = document.createElement("div");
   transcript.className = WIDGET_CSS_CLASSES.transcript;
@@ -1014,6 +1041,56 @@ function buildVoiceThereWidget(
       : "Mute your microphone. You can keep typing.";
   };
   renderMute();
+
+  // The caller's choice outlives sessions, like the microphone choice.
+  let speakerMuted = false;
+  const speakerBtn = document.createElement("button");
+  speakerBtn.type = "button";
+  speakerBtn.className = WIDGET_CSS_CLASSES.speaker;
+  speakerBtn.setAttribute("data-voicethere-speaker", "");
+  speakerBtn.style.width = "28px";
+  speakerBtn.style.height = "28px";
+  speakerBtn.style.padding = "0";
+  speakerBtn.style.display = "inline-flex";
+  speakerBtn.style.alignItems = "center";
+  speakerBtn.style.justifyContent = "center";
+  speakerBtn.style.flexShrink = "0";
+  speakerBtn.style.borderRadius = "50%";
+  speakerBtn.style.border = "1px solid rgba(255,255,255,0.15)";
+  speakerBtn.style.background = "transparent";
+  speakerBtn.style.color = "inherit";
+  speakerBtn.style.cursor = "pointer";
+  if (inline) {
+    // Absolute in the panel corner so it stays visible when a host hides the
+    // header with customCss. Launcher mode keeps it in the header, next to ×.
+    panel.style.position = "relative";
+    speakerBtn.style.position = "absolute";
+    speakerBtn.style.top = "8px";
+    speakerBtn.style.right = "8px";
+    speakerBtn.style.zIndex = "1";
+  }
+  const renderSpeaker = () => {
+    const label = speakerMuted ? "Unmute agent audio" : "Mute agent audio";
+    speakerBtn.style.display = isVoiceSessionMode(mode)
+      ? "inline-flex"
+      : "none";
+    speakerBtn.innerHTML = speakerIconSvg(16, speakerMuted);
+    speakerBtn.setAttribute("aria-pressed", speakerMuted ? "true" : "false");
+    speakerBtn.setAttribute("aria-label", label);
+    speakerBtn.title = label;
+  };
+  renderSpeaker();
+  speakerBtn.onclick = () => {
+    speakerMuted = !speakerMuted;
+    inboundAudio.muted = speakerMuted;
+    renderSpeaker();
+  };
+  if (inline) {
+    panel.append(speakerBtn);
+  } else {
+    headerActions.append(speakerBtn);
+  }
+  headerActions.append(closeBtn);
 
   composer.append(input, connectBtn, muteBtn);
 
@@ -1298,6 +1375,9 @@ function buildVoiceThereWidget(
       },
       onAgentAudioTrack: (track) => {
         callHost(runtime.onAgentAudioTrack, track);
+        // A host may touch the element on a new track (for example a volume
+        // output setting `muted`); the caller's speaker choice wins.
+        inboundAudio.muted = speakerMuted;
       },
       onControlMessage: (payload) => {
         handleWidgetControl(payload);
@@ -1361,7 +1441,7 @@ function buildVoiceThereWidget(
       },
       onAudioPlayback: (playbackState) => {
         playbackWarning.style.display =
-          playbackState === "blocked" ? "block" : "none";
+          playbackState === "blocked" ? "flex" : "none";
       },
     });
 
