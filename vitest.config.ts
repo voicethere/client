@@ -1,6 +1,7 @@
 import { configDefaults, defineConfig } from "vitest/config";
+import { localWorkerLimit } from "./vitest.workers";
 
-export default defineConfig({
+export default defineConfig(async () => ({
   test: {
     // The Chromium harness runs under Playwright (npm run test:browser).
     exclude: [...configDefaults.exclude, "test/browser-stereo/**"],
@@ -12,5 +13,7 @@ export default defineConfig({
       include: ["src/**/*.test-d.ts"],
       tsconfig: "./tsconfig.test.json",
     },
+    // Caps local vitest workers across concurrent runs on one machine; no effect in CI.
+    ...(await localWorkerLimit()),
   },
-});
+}));
