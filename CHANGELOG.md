@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-11-09
+
 ### Added
 
 - Embed widget speaker button (voice and hybrid modes): a round button in the top-right corner of the panel mutes the agent's audio. Audio is on by default, the button shows a tooltip ("Mute agent audio" / "Unmute agent audio"), and the choice holds across sessions of the same widget. In launcher mode the button sits in the header next to the close button. Style it with the class `vt-widget-speaker`.
