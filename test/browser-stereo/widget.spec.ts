@@ -120,14 +120,27 @@ test("Mute disables the outbound mic track in a real browser", async ({
       return stream!.getAudioTracks().map((t) => t.enabled);
     });
   expect(await micEnabled()).toEqual([true]);
-  await page.getByRole("button", { name: "Mute" }).click();
+  // exact: the speaker button ("Mute agent audio") also contains "Mute".
+  await page.getByRole("button", { name: "Mute", exact: true }).click();
   expect(await micEnabled()).toEqual([false]);
-  await expect(page.getByRole("button", { name: "Unmute" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  await page.getByRole("button", { name: "Unmute" }).click();
+  await expect(
+    page.getByRole("button", { name: "Unmute", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Unmute", exact: true }).click();
   expect(await micEnabled()).toEqual([true]);
+  // The speaker button mutes agent playback only; the mic stays live.
+  const agentAudioMuted = () =>
+    page.evaluate(() =>
+      Array.from(document.querySelectorAll("audio")).map((a) => a.muted),
+    );
+  await page.getByRole("button", { name: "Mute agent audio" }).click();
+  await expect(
+    page.getByRole("button", { name: "Unmute agent audio" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  expect(await agentAudioMuted()).toContain(true);
+  expect(await micEnabled()).toEqual([true]);
+  await page.getByRole("button", { name: "Unmute agent audio" }).click();
+  expect(await agentAudioMuted()).not.toContain(true);
   // Leave the room so the next test can join it.
   await page.getByRole("button", { name: "Disconnect" }).click();
   await expect(page.locator(".vt-widget-status")).toContainText("Disconnected");
