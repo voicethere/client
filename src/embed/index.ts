@@ -1068,6 +1068,12 @@ function buildVoiceThereWidget(
     speakerBtn.style.top = "8px";
     speakerBtn.style.right = "8px";
     speakerBtn.style.zIndex = "1";
+    speakerBtn.style.background = "var(--vt-color-bg)";
+    if (isVoiceSessionMode(mode)) {
+      // Keep the warning rows clear of the corner button.
+      micWarning.style.marginRight = "36px";
+      playbackWarning.style.marginRight = "36px";
+    }
   }
   const renderSpeaker = () => {
     const label = speakerMuted ? "Unmute agent audio" : "Mute agent audio";

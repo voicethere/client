@@ -2501,6 +2501,39 @@ describe("createVoiceThereWidget host hooks", () => {
       expect(audioEl().muted).toBe(true);
     });
 
+    const parentOf = (child: MockElement) =>
+      createdElements.find((el) => el.children.includes(child))!;
+
+    it("inline: speaker is absolute in the panel corner and warnings keep clear of it", () => {
+      widgetIn(BrowserSessionModeType.Voice, { display: "inline" });
+      const speaker = speakerEl();
+      expect(speaker.style.position).toBe("absolute");
+      expect(parentOf(speaker).style.position).toBe("relative");
+      const pw = findByAttr(mount, "data-voicethere-playback-warning")!;
+      const mw = findByAttr(mount, "data-voicethere-mic-warning")!;
+      expect(pw.style.marginRight).toBe("36px");
+      expect(mw.style.marginRight).toBe("36px");
+    });
+
+    it("launcher: speaker sits in the header before the close button", () => {
+      widgetIn(BrowserSessionModeType.Voice);
+      const speaker = speakerEl();
+      const siblings = parentOf(speaker).children;
+      const next = siblings[siblings.indexOf(speaker) + 1]!;
+      expect(next.classList.contains(WIDGET_CSS_CLASSES.close)).toBe(true);
+      expect(speaker.style.position || "").toBe("");
+    });
+
+    it("icon changes between waves and X when toggled", () => {
+      widgetIn(BrowserSessionModeType.Voice);
+      const html = () =>
+        (speakerEl() as unknown as { innerHTML: string }).innerHTML;
+      expect(html()).toContain("M15.5 8.5a5 5 0 0 1 0 7");
+      speakerEl().click();
+      expect(html()).toContain('x1="16" y1="9"');
+      expect(html()).not.toContain("M15.5 8.5a5 5 0 0 1 0 7");
+    });
+
     it("is hidden in chat mode, visible in voice mode and with audio.silent", () => {
       widgetIn(BrowserSessionModeType.Chat);
       expect(speakerEl().style.display).toBe("none");
