@@ -177,6 +177,7 @@ const INTERNAL: Record<string, string> = {
   DEBUG_CONSOLE_MAX_EVENTS:
     "debug-console.ts ring size; exported for tests only",
   postEndUserIdentify: "used by browser-voice-session.ts",
+  playAudioElement: "used by browser-voice-session.ts",
   assertEndUserOptions: "used by startSession and browser-voice-session.ts",
   parseLegacyAgentError: "used by browser-voice-session.ts",
   emitDiagnosticSafely: "used by browser-voice-session.ts",

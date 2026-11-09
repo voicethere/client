@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The "Enable sound" notice no longer appears when the page's own code changes the audio source right after the agent's audio starts.
+
 ## [0.25.0] - 2026-11-09
 
 ### Added
