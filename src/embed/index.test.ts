@@ -2409,4 +2409,187 @@ describe("createVoiceThereWidget host hooks", () => {
       expect(muteEl().style.display).toBe("");
     });
   });
+
+  describe("Speaker button", () => {
+    const voiceSession = () => ({
+      mode: BrowserSessionModeType.Voice,
+      disconnect: vi.fn(),
+      waitForConnected: vi.fn(async () => undefined),
+      getConnectionStatus: () => ({}),
+      getAudioInputState: () => "live" as const,
+      setMicMuted: vi.fn(),
+      isMicMuted: () => false,
+      unlockAudioPlayback: vi.fn(async () => true),
+      getAudioPlaybackState: () => "idle" as const,
+      sendChat: vi.fn(),
+    });
+
+    const widgetIn = (
+      mode: BrowserSessionModeType,
+      extra: Record<string, unknown> = {},
+    ) =>
+      createVoiceThereWidget({
+        projectId: "p",
+        apiBase: "https://api.example.com",
+        clientKey: "key",
+        mode,
+        mount: mount as unknown as HTMLElement,
+        ...extra,
+      });
+
+    const speakerEl = () =>
+      createdElements.find((el) =>
+        el.classList.contains(WIDGET_CSS_CLASSES.speaker),
+      )!;
+    const audioEl = () =>
+      createdElements.find((el) => el.tagName === "AUDIO")! as MockElement & {
+        muted?: boolean;
+      };
+
+    it("is unmuted by default and toggles the audio element", () => {
+      widgetIn(BrowserSessionModeType.Voice);
+      expect(speakerEl().getAttribute("data-voicethere-speaker")).toBe("");
+      expect(speakerEl().getAttribute("aria-pressed")).toBe("false");
+      expect(speakerEl().title).toBe("Mute agent audio");
+      expect(speakerEl().getAttribute("aria-label")).toBe("Mute agent audio");
+      expect(audioEl().muted).toBeFalsy();
+      speakerEl().click();
+      expect(audioEl().muted).toBe(true);
+      expect(speakerEl().getAttribute("aria-pressed")).toBe("true");
+      expect(speakerEl().title).toBe("Unmute agent audio");
+      speakerEl().click();
+      expect(audioEl().muted).toBe(false);
+      expect(speakerEl().getAttribute("aria-pressed")).toBe("false");
+      expect(speakerEl().title).toBe("Mute agent audio");
+    });
+
+    it("the choice holds across a disconnect and connect", async () => {
+      connectBrowserSession
+        .mockResolvedValueOnce(voiceSession())
+        .mockResolvedValueOnce(voiceSession());
+      widgetIn(BrowserSessionModeType.Voice);
+      findButtonByText(mount, "Connect")!.click();
+      await vi.waitFor(() =>
+        expect(findButtonByText(mount, "Disconnect")).toBeDefined(),
+      );
+      speakerEl().click();
+      findButtonByText(mount, "Disconnect")!.click();
+      findButtonByText(mount, "Connect")!.click();
+      await vi.waitFor(() =>
+        expect(findButtonByText(mount, "Disconnect")).toBeDefined(),
+      );
+      expect(audioEl().muted).toBe(true);
+      expect(speakerEl().getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("a host onAgentAudioTrack that unmutes does not override the choice", async () => {
+      connectBrowserSession.mockResolvedValueOnce(voiceSession());
+      const hostTrack = vi.fn(() => {
+        audioEl().muted = false;
+      });
+      widgetIn(BrowserSessionModeType.Voice, { onAgentAudioTrack: hostTrack });
+      findButtonByText(mount, "Connect")!.click();
+      await vi.waitFor(() =>
+        expect(findButtonByText(mount, "Disconnect")).toBeDefined(),
+      );
+      speakerEl().click();
+      const opts = connectBrowserSession.mock.calls[0]![0] as {
+        onAgentAudioTrack: (track: unknown) => void;
+      };
+      opts.onAgentAudioTrack({ kind: "audio" });
+      expect(hostTrack).toHaveBeenCalled();
+      expect(audioEl().muted).toBe(true);
+    });
+
+    const parentOf = (child: MockElement) =>
+      createdElements.find((el) => el.children.includes(child))!;
+
+    it("inline: speaker is absolute in the panel corner and warnings keep clear of it", () => {
+      widgetIn(BrowserSessionModeType.Voice, { display: "inline" });
+      const speaker = speakerEl();
+      expect(speaker.style.position).toBe("absolute");
+      expect(parentOf(speaker).style.position).toBe("relative");
+      const pw = findByAttr(mount, "data-voicethere-playback-warning")!;
+      const mw = findByAttr(mount, "data-voicethere-mic-warning")!;
+      expect(pw.style.marginRight).toBe("36px");
+      expect(mw.style.marginRight).toBe("36px");
+    });
+
+    it("launcher: speaker sits in the header before the close button", () => {
+      widgetIn(BrowserSessionModeType.Voice);
+      const speaker = speakerEl();
+      const siblings = parentOf(speaker).children;
+      const next = siblings[siblings.indexOf(speaker) + 1]!;
+      expect(next.classList.contains(WIDGET_CSS_CLASSES.close)).toBe(true);
+      expect(speaker.style.position || "").toBe("");
+    });
+
+    it("icon changes between waves and X when toggled", () => {
+      widgetIn(BrowserSessionModeType.Voice);
+      const html = () =>
+        (speakerEl() as unknown as { innerHTML: string }).innerHTML;
+      expect(html()).toContain("M15.5 8.5a5 5 0 0 1 0 7");
+      speakerEl().click();
+      expect(html()).toContain('x1="16" y1="9"');
+      expect(html()).not.toContain("M15.5 8.5a5 5 0 0 1 0 7");
+    });
+
+    it("is hidden in chat mode, visible in voice mode and with audio.silent", () => {
+      widgetIn(BrowserSessionModeType.Chat);
+      expect(speakerEl().style.display).toBe("none");
+      createdElements.length = 0;
+      widgetIn(BrowserSessionModeType.Voice, { audio: { silent: true } });
+      expect(speakerEl().style.display).not.toBe("none");
+      createdElements.length = 0;
+      widgetIn(BrowserSessionModeType.Voice);
+      expect(speakerEl().style.display).not.toBe("none");
+    });
+  });
+
+  describe("Playback banner", () => {
+    it("shows a compact flex row when blocked and hides when playing", async () => {
+      connectBrowserSession.mockResolvedValueOnce({
+        mode: BrowserSessionModeType.Voice,
+        disconnect: vi.fn(),
+        waitForConnected: vi.fn(async () => undefined),
+        getConnectionStatus: () => ({}),
+        getAudioInputState: () => "live" as const,
+        setMicMuted: vi.fn(),
+        isMicMuted: () => false,
+        unlockAudioPlayback: vi.fn(async () => true),
+        getAudioPlaybackState: () => "idle" as const,
+        sendChat: vi.fn(),
+      });
+      createVoiceThereWidget({
+        projectId: "p",
+        apiBase: "https://api.example.com",
+        clientKey: "key",
+        mode: BrowserSessionModeType.Voice,
+        mount: mount as unknown as HTMLElement,
+      });
+      findButtonByText(mount, "Connect")!.click();
+      await vi.waitFor(() =>
+        expect(findButtonByText(mount, "Disconnect")).toBeDefined(),
+      );
+      const opts = connectBrowserSession.mock.calls[0]![0] as {
+        onAudioPlayback: (state: string) => void;
+      };
+      const banner = findByAttr(mount, "data-voicethere-playback-warning")!;
+      expect(banner.style.display).toBe("none");
+      opts.onAudioPlayback("blocked");
+      expect(banner.style.display).toBe("flex");
+      expect(
+        findButtonByText(banner, "Enable sound")?.getAttribute(
+          "data-voicethere-playback-enable",
+        ),
+      ).toBe("");
+      expect(
+        banner.children.some(
+          (c) => c.textContent === "Sound is off in this browser.",
+        ),
+      ).toBe(true);
+      opts.onAudioPlayback("playing");
+      expect(banner.style.display).toBe("none");
+    });
+  });
 });
